@@ -17,7 +17,7 @@ metadata:
   name: order-service
   namespace: ecommerce
 spec:
-  replicas: 2
+  replicas: 4
   selector:
     matchLabels:
       app: order-service
