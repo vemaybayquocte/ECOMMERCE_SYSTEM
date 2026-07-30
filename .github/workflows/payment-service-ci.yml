@@ -1,0 +1,53 @@
+name: payment-service CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'payment-service/**'
+      - '.github/workflows/payment-service-ci.yml'
+  pull_request:
+    paths:
+      - 'payment-service/**'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: payment-service
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'yarn'
+          cache-dependency-path: payment-service/yarn.lock
+
+      - run: yarn install --frozen-lockfile
+      - run: yarn lint
+      - run: yarn build
+      - run: yarn test
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v5
+        with:
+          context: payment-service
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/payment-service:latest
+            ghcr.io/${{ github.repository_owner }}/payment-service:${{ github.sha }}
