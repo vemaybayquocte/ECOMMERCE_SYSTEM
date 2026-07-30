@@ -10,6 +10,7 @@ data:
   DB_NAME: order_db
   RABBITMQ_URI: amqp://guest:guest@rabbitmq:5672
   RABBITMQ_EXCHANGE: ecommerce.events
+  KAFKA_BROKERS: kafka:9092
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -42,13 +43,24 @@ spec:
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef: { name: order-db-secret, key: POSTGRES_PASSWORD }
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  { name: order-service-auth-secret, key: JWT_SECRET }
+            - name: DEMO_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  { name: order-service-auth-secret, key: DEMO_API_KEY }
+          # order-service's outbox relay joins a Kafka consumer group at
+          # startup, which can take 20-30s — probes are timed accordingly
+          # so a slow-but-healthy boot isn't mistaken for a crash.
           readinessProbe:
             httpGet: { path: /health, port: 3001 }
-            initialDelaySeconds: 10
+            initialDelaySeconds: 15
             periodSeconds: 10
           livenessProbe:
             httpGet: { path: /health, port: 3001 }
-            initialDelaySeconds: 20
+            initialDelaySeconds: 40
             periodSeconds: 20
 ---
 apiVersion: v1

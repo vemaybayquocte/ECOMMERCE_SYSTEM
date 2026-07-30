@@ -3,15 +3,12 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { AuthModule } from './auth/auth.module';
 import { HealthModule } from './health/health.module';
+import { InventoryModule } from './inventory/inventory.module';
+import { StockItem } from './inventory/entities/stock-item.entity';
+import { Reservation } from './inventory/entities/reservation.entity';
 import { MetricsModule } from './metrics/metrics.module';
-import { Order } from './order/entities/order.entity';
-import { OutboxEvent } from './order/entities/outbox-event.entity';
-import { OrderModule } from './order/order.module';
-import { OutboxRelayModule } from './outbox-relay/outbox-relay.module';
 import { SharedRabbitMQModule } from './rabbitmq/rabbitmq.module';
-import { SagaModule } from './saga/saga.module';
 
 @Module({
   imports: [
@@ -26,15 +23,12 @@ import { SagaModule } from './saga/saga.module';
         username: config.get<string>('DB_USERNAME'),
         password: config.get<string>('DB_PASSWORD'),
         database: config.get<string>('DB_NAME'),
-        entities: [Order, OutboxEvent],
+        entities: [StockItem, Reservation],
         synchronize: true,
       }),
     }),
     SharedRabbitMQModule,
-    AuthModule,
-    OrderModule,
-    OutboxRelayModule,
-    SagaModule,
+    InventoryModule,
     HealthModule,
     MetricsModule,
   ],

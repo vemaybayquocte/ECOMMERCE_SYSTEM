@@ -1,0 +1,67 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: register-outbox-connector
+  namespace: ecommerce
+spec:
+  backoffLimit: 100
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: register-connector
+          image: curlimages/curl:8.10.1
+          command:
+            - sh
+            - -c
+            - |
+              set -u
+              CONFIG='{
+                "name": "outbox-connector",
+                "config": {
+                  "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+                  "database.hostname": "order-db",
+                  "database.port": "5432",
+                  "database.user": "postgres",
+                  "database.password": "postgres",
+                  "database.dbname": "order_db",
+                  "topic.prefix": "outboxcdc",
+                  "table.include.list": "public.outbox_events",
+                  "plugin.name": "pgoutput",
+                  "slot.name": "debezium_outbox_slot",
+                  "publication.name": "dbz_outbox_publication",
+                  "publication.autocreate.mode": "filtered",
+                  "time.precision.mode": "connect",
+                  "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+                  "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+                  "key.converter.schemas.enable": "false",
+                  "value.converter.schemas.enable": "false",
+                  "transforms": "outbox",
+                  "transforms.outbox.type": "io.debezium.transforms.outbox.EventRouter",
+                  "transforms.outbox.table.field.event.id": "id",
+                  "transforms.outbox.table.field.event.key": "aggregateId",
+                  "transforms.outbox.table.field.event.type": "eventType",
+                  "transforms.outbox.table.field.event.payload": "payload",
+                  "transforms.outbox.route.by.field": "aggregateType",
+                  "transforms.outbox.route.topic.replacement": "outbox.event.${routedByValue}"
+                }
+              }'
+
+              i=1
+              while [ "$i" -le 60 ]; do
+                STATUS=$(curl -s -o /tmp/resp -w "%{http_code}" -X POST http://debezium-connect:8083/connectors \
+                  -H "Content-Type: application/json" \
+                  -d "$CONFIG")
+                echo "Attempt $i: HTTP $STATUS"
+                cat /tmp/resp
+                echo ""
+                if [ "$STATUS" = "201" ] || [ "$STATUS" = "409" ]; then
+                  echo "outbox-connector registered (or already exists)."
+                  exit 0
+                fi
+                i=$((i + 1))
+                sleep 10
+              done
+              echo "Failed to register outbox-connector after 60 attempts"
+              exit 1

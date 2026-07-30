@@ -4,7 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { AmqpConnection, Nack } from '@golevelup/nestjs-rabbitmq';
 import { PaymentService } from './payment.service';
 import { Payment, PaymentStatus } from './entities/payment.entity';
-import { OrderCreatedEvent } from './events/order-created.event';
+import { PaymentRequestedEvent } from './events/payment-requested.event';
 
 describe('PaymentService', () => {
   let paymentRepository: {
@@ -15,11 +15,10 @@ describe('PaymentService', () => {
   let amqpConnection: { publish: jest.Mock };
   let randomSpy: jest.SpyInstance;
 
-  const baseEvent: OrderCreatedEvent = {
+  const baseEvent: PaymentRequestedEvent = {
     orderId: 'order-1',
     customerId: 'cust-1',
     total: 100,
-    createdAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
   };
 
   async function buildService(
@@ -65,17 +64,18 @@ describe('PaymentService', () => {
       status: PaymentStatus.SUCCESS,
     });
 
-    const result = await service.handleOrderCreated(baseEvent, {}, {});
+    const result = await service.handlePaymentRequested(baseEvent, {}, {});
 
     expect(result).toBeUndefined();
     expect(paymentRepository.save).not.toHaveBeenCalled();
+    expect(amqpConnection.publish).not.toHaveBeenCalled();
   });
 
-  it('saves a SUCCESS payment when the simulated gateway call succeeds', async () => {
+  it('saves a SUCCESS payment and publishes payment.succeeded', async () => {
     const service = await buildService(0);
     randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.5); // < 0.85 -> SUCCESS
 
-    await service.handleOrderCreated(baseEvent, {}, {});
+    await service.handlePaymentRequested(baseEvent, {}, {});
 
     expect(paymentRepository.save).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -83,18 +83,32 @@ describe('PaymentService', () => {
         status: PaymentStatus.SUCCESS,
       }),
     );
+    expect(amqpConnection.publish).toHaveBeenCalledWith(
+      'ecommerce.events',
+      'payment.succeeded',
+      expect.objectContaining({ orderId: 'order-1', status: 'SUCCESS' }),
+    );
   });
 
-  it('saves a FAILED payment (business decline) without touching the DLQ', async () => {
+  it('saves a FAILED payment (business decline) and publishes payment.failed, without touching the DLQ', async () => {
     const service = await buildService(0);
     randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.99); // >= 0.85 -> FAILED
 
-    await service.handleOrderCreated(baseEvent, {}, {});
+    await service.handlePaymentRequested(baseEvent, {}, {});
 
     expect(paymentRepository.save).toHaveBeenCalledWith(
       expect.objectContaining({ status: PaymentStatus.FAILED }),
     );
-    expect(amqpConnection.publish).not.toHaveBeenCalled();
+    expect(amqpConnection.publish).toHaveBeenCalledWith(
+      'ecommerce.events',
+      'payment.failed',
+      expect.objectContaining({ orderId: 'order-1', status: 'FAILED' }),
+    );
+    expect(amqpConnection.publish).not.toHaveBeenCalledWith(
+      'ecommerce.events.dlq',
+      expect.anything(),
+      expect.anything(),
+    );
   });
 
   it('returns Nack(false) on a transient gateway error instead of throwing', async () => {
@@ -102,24 +116,34 @@ describe('PaymentService', () => {
     // Math.random() < 1 is always true.
     const service = await buildService(1);
 
-    const result = await service.handleOrderCreated(baseEvent, {}, {});
+    const result = await service.handlePaymentRequested(baseEvent, {}, {});
 
     expect(result).toBeInstanceOf(Nack);
     expect((result as Nack).requeue).toBe(false);
     expect(paymentRepository.save).not.toHaveBeenCalled();
+    expect(amqpConnection.publish).not.toHaveBeenCalled();
   });
 
-  it('routes to the DLQ instead of reprocessing once the retry count reaches the max', async () => {
+  it('routes to the DLQ and publishes payment.failed once the retry count reaches the max', async () => {
     const service = await buildService();
     const headers = { 'x-death': [{ count: 3 }] };
 
-    const result = await service.handleOrderCreated(baseEvent, {}, headers);
+    const result = await service.handlePaymentRequested(
+      baseEvent,
+      {},
+      headers,
+    );
 
     expect(result).toBeUndefined();
     expect(amqpConnection.publish).toHaveBeenCalledWith(
       'ecommerce.events.dlq',
-      'order.created',
+      'payment.requested',
       baseEvent,
+    );
+    expect(amqpConnection.publish).toHaveBeenCalledWith(
+      'ecommerce.events',
+      'payment.failed',
+      expect.objectContaining({ orderId: 'order-1', status: 'FAILED' }),
     );
     expect(paymentRepository.save).not.toHaveBeenCalled();
   });

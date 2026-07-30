@@ -26,23 +26,23 @@ import { RabbitMQModule } from '@golevelup/nestjs-rabbitmq';
             {
               // Holds failed messages for a fixed delay, then dead-letters
               // them back to the main exchange for another processing attempt.
-              name: 'payment.order-created-queue.retry',
+              name: 'payment.requested-queue.retry',
               exchange: retryExchange,
-              routingKey: 'order.created',
+              routingKey: 'payment.requested',
               options: {
                 durable: true,
                 arguments: {
                   'x-message-ttl': 5000,
                   'x-dead-letter-exchange': exchange,
-                  'x-dead-letter-routing-key': 'order.created',
+                  'x-dead-letter-routing-key': 'payment.requested',
                 },
               },
             },
             {
               // Final resting place for messages that exceeded the retry limit.
-              name: 'payment.order-created-queue.dlq',
+              name: 'payment.requested-queue.dlq',
               exchange: dlqExchange,
-              routingKey: 'order.created',
+              routingKey: 'payment.requested',
               options: { durable: true },
             },
           ],

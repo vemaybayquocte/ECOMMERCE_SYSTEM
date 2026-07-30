@@ -35,6 +35,7 @@ export class OrderService {
         orderId: order.id,
         customerId: order.customerId,
         total: order.total,
+        items: order.items,
         createdAt: order.createdAt.toISOString(),
       };
 

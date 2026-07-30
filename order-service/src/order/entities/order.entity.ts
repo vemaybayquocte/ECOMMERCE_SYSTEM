@@ -7,8 +7,9 @@ import {
 
 export enum OrderStatus {
   PENDING = 'PENDING',
-  PAID = 'PAID',
-  FAILED = 'FAILED',
+  INVENTORY_RESERVED = 'INVENTORY_RESERVED',
+  COMPLETED = 'COMPLETED',
+  CANCELLED = 'CANCELLED',
 }
 
 export interface OrderItem {

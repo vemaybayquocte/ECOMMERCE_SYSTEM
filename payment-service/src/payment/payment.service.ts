@@ -9,7 +9,8 @@ import {
 } from '@golevelup/nestjs-rabbitmq';
 import { context, propagation, trace } from '@opentelemetry/api';
 import { Payment, PaymentStatus } from './entities/payment.entity';
-import { OrderCreatedEvent } from './events/order-created.event';
+import { PaymentRequestedEvent } from './events/payment-requested.event';
+import { PaymentResultEvent } from './events/payment-result.event';
 
 const MAX_RETRIES = 3;
 const tracer = trace.getTracer('payment-service');
@@ -40,16 +41,16 @@ export class PaymentService {
 
   @RabbitSubscribe({
     exchange: 'ecommerce.events',
-    routingKey: 'order.created',
-    queue: 'payment.order-created-queue',
+    routingKey: 'payment.requested',
+    queue: 'payment.requested-queue',
     queueOptions: {
       durable: true,
       deadLetterExchange: 'ecommerce.events.retry',
-      deadLetterRoutingKey: 'order.created',
+      deadLetterRoutingKey: 'payment.requested',
     },
   })
-  async handleOrderCreated(
-    event: OrderCreatedEvent,
+  async handlePaymentRequested(
+    event: PaymentRequestedEvent,
     _rawMessage: unknown,
     headers: Record<string, any>,
   ): Promise<Nack | void> {
@@ -60,10 +61,10 @@ export class PaymentService {
     const parentContext = propagation.extract(context.active(), headers ?? {});
 
     return context.with(parentContext, () =>
-      tracer.startActiveSpan('payment.handleOrderCreated', async (span) => {
+      tracer.startActiveSpan('payment.handlePaymentRequested', async (span) => {
         span.setAttribute('order.id', event.orderId);
         try {
-          return await this.processOrderCreated(event, headers);
+          return await this.processPaymentRequested(event, headers);
         } finally {
           span.end();
         }
@@ -71,8 +72,8 @@ export class PaymentService {
     );
   }
 
-  private async processOrderCreated(
-    event: OrderCreatedEvent,
+  private async processPaymentRequested(
+    event: PaymentRequestedEvent,
     headers: Record<string, any>,
   ): Promise<Nack | void> {
     // Idempotency: at-least-once delivery means the broker can redeliver a
@@ -97,9 +98,10 @@ export class PaymentService {
       );
       await this.amqpConnection.publish(
         this.dlqExchange,
-        'order.created',
+        'payment.requested',
         event,
       );
+      await this.publishResult(event.orderId, 'FAILED');
       return;
     }
 
@@ -136,6 +138,30 @@ export class PaymentService {
     this.logger.log(
       `Payment ${payment.status} for order ${event.orderId} (payment id: ${payment.id})`,
     );
+
+    // Tell the saga orchestrator (order-service) how this step ended so it
+    // can confirm or release the inventory reservation accordingly.
+    await this.publishResult(
+      event.orderId,
+      status === PaymentStatus.SUCCESS ? 'SUCCESS' : 'FAILED',
+      payment.id,
+    );
+  }
+
+  private async publishResult(
+    orderId: string,
+    status: 'SUCCESS' | 'FAILED',
+    paymentId?: string,
+  ): Promise<void> {
+    const routingKey = status === 'SUCCESS' ? 'payment.succeeded' : 'payment.failed';
+    const resultEvent: PaymentResultEvent = { orderId, paymentId, status };
+    try {
+      await this.amqpConnection.publish(this.exchange, routingKey, resultEvent);
+    } catch (err) {
+      this.logger.error(
+        `Failed to publish ${routingKey} for order ${orderId}: ${(err as Error).message}`,
+      );
+    }
   }
 
   /**
