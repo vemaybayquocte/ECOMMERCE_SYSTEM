@@ -43,6 +43,9 @@ spec:
               valueFrom:
                 secretKeyRef:
                   { name: inventory-db-secret, key: POSTGRES_PASSWORD }
+          resources:
+            requests: { memory: '200Mi', cpu: '100m' }
+            limits: { memory: '400Mi', cpu: '500m' }
           readinessProbe:
             httpGet: { path: /health, port: 3003 }
             initialDelaySeconds: 10

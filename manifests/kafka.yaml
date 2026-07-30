@@ -39,6 +39,15 @@ spec:
               value: '1'
             - name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS
               value: '0'
+            # Cap the JVM heap explicitly: without this the broker sizes its
+            # heap off the node's total memory rather than this pod's limit,
+            # which starved the rest of the cluster and caused repeated OOM
+            # kills on a resource-constrained Minikube node.
+            - name: KAFKA_HEAP_OPTS
+              value: '-Xmx512M -Xms512M'
+          resources:
+            requests: { memory: '640Mi', cpu: '250m' }
+            limits: { memory: '900Mi', cpu: '1' }
           readinessProbe:
             tcpSocket:
               port: 9092

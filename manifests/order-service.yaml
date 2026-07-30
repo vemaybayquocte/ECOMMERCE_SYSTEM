@@ -18,7 +18,7 @@ metadata:
   name: order-service
   namespace: ecommerce
 spec:
-  replicas: 4
+  replicas: 2
   selector:
     matchLabels:
       app: order-service
@@ -51,6 +51,9 @@ spec:
               valueFrom:
                 secretKeyRef:
                   { name: order-service-auth-secret, key: DEMO_API_KEY }
+          resources:
+            requests: { memory: '200Mi', cpu: '100m' }
+            limits: { memory: '400Mi', cpu: '500m' }
           # order-service's outbox relay joins a Kafka consumer group at
           # startup, which can take 20-30s — probes are timed accordingly
           # so a slow-but-healthy boot isn't mistaken for a crash.
