@@ -13,6 +13,10 @@ spec:
       labels:
         app: debezium-connect
     spec:
+      # See kafka.yaml: K8s auto-injects <SERVICE>_PORT-style env vars that
+      # can collide with Confluent/Kafka-Connect-family images' own legacy
+      # config vars.
+      enableServiceLinks: false
       containers:
         - name: debezium-connect
           image: debezium/connect:2.5

@@ -13,6 +13,14 @@ spec:
       labels:
         app: kafka
     spec:
+      # Kubernetes auto-injects Docker-links-style env vars for every
+      # Service into every pod (e.g. KAFKA_PORT=tcp://<ip>:9092 for a
+      # Service named "kafka"). That name collides exactly with
+      # Confluent's own legacy KAFKA_PORT config var, so the broker tries
+      # to parse the K8s-injected URL as a port number and crashes on
+      # startup. Disabling service-links avoids the collision; we don't
+      # need it anyway since every hostname here is resolved via K8s DNS.
+      enableServiceLinks: false
       containers:
         - name: kafka
           image: confluentinc/cp-kafka:7.5.3

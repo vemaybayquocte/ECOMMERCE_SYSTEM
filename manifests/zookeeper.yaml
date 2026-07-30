@@ -13,6 +13,9 @@ spec:
       labels:
         app: zookeeper
     spec:
+      # See kafka.yaml: K8s auto-injects <SERVICE>_PORT-style env vars that
+      # can collide with Confluent images' own legacy config vars.
+      enableServiceLinks: false
       containers:
         - name: zookeeper
           image: confluentinc/cp-zookeeper:7.5.3
