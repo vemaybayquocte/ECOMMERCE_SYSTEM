@@ -1,3 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-plugins
+  namespace: ecommerce
+data:
+  enabled_plugins: '[rabbitmq_management,rabbitmq_prometheus].'
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,6 +27,7 @@ spec:
           ports:
             - containerPort: 5672
             - containerPort: 15672
+            - containerPort: 15692
           env:
             - name: RABBITMQ_DEFAULT_USER
               valueFrom:
@@ -26,11 +35,25 @@ spec:
             - name: RABBITMQ_DEFAULT_PASS
               valueFrom:
                 secretKeyRef: { name: rabbitmq-secret, key: RABBITMQ_DEFAULT_PASS }
+          volumeMounts:
+            - name: plugins
+              mountPath: /etc/rabbitmq/enabled_plugins
+              subPath: enabled_plugins
           readinessProbe:
+            # rabbitmq-diagnostics ping does a real distributed Erlang RPC
+            # call - the default 1s probe timeout is too tight for that
+            # under any real load and was causing constant readiness
+            # flapping (visible as hundreds of "Unhealthy" events) even
+            # when the broker was perfectly fine.
             exec:
               command: ['rabbitmq-diagnostics', '-q', 'ping']
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 10
+      volumes:
+        - name: plugins
+          configMap:
+            name: rabbitmq-plugins
 ---
 apiVersion: v1
 kind: Service
@@ -47,3 +70,6 @@ spec:
     - name: management
       port: 15672
       targetPort: 15672
+    - name: metrics
+      port: 15692
+      targetPort: 15692

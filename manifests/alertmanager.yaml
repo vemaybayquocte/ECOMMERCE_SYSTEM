@@ -1,0 +1,68 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: ecommerce
+data:
+  alertmanager.yml: |
+    # No external receiver configured (no Slack/email credentials in this
+    # demo environment) - alerts still show up in Alertmanager's own UI/API,
+    # which is what the observability pipeline demonstrates here. Wiring a
+    # real receiver later is just adding a webhook/slack_configs block.
+    route:
+      receiver: default
+      group_by: ['alertname']
+      group_wait: 10s
+      group_interval: 1m
+      repeat_interval: 4h
+    receivers:
+      - name: default
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: ecommerce
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alertmanager
+  template:
+    metadata:
+      labels:
+        app: alertmanager
+    spec:
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.27.0
+          args:
+            - '--config.file=/etc/alertmanager/alertmanager.yml'
+          ports:
+            - containerPort: 9093
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager
+          resources:
+            requests: { memory: '64Mi', cpu: '50m' }
+            limits: { memory: '128Mi', cpu: '200m' }
+          readinessProbe:
+            httpGet: { path: /-/ready, port: 9093 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap:
+            name: alertmanager-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: ecommerce
+spec:
+  selector:
+    app: alertmanager
+  ports:
+    - port: 9093
+      targetPort: 9093

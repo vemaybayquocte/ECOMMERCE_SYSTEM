@@ -1,0 +1,191 @@
+# NOTE: minikube's default docker-driver networking has no NetworkPolicy
+# controller (no Calico/Cilium) - these policies are accepted by the API
+# but NOT enforced on this cluster. They're written correctly so they take
+# effect immediately on any real cluster with a policy-enforcing CNI; here
+# they document the intended traffic graph even though nothing is actually
+# blocked yet.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: ecommerce
+spec:
+  podSelector: {}
+  policyTypes: ['Ingress']
+---
+# Every service's own DB: only that service (+ its backup CronJob) may
+# connect. order-db additionally allows debezium-connect (CDC source).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-order-db
+  namespace: ecommerce
+spec:
+  podSelector: { matchLabels: { app: order-db } }
+  policyTypes: ['Ingress']
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: order-service } }
+        - podSelector: { matchLabels: { app: debezium-connect } }
+        - podSelector: { matchLabels: { job-name: order-db-backup } }
+      ports: [{ port: 5432 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-payment-db
+  namespace: ecommerce
+spec:
+  podSelector: { matchLabels: { app: payment-db } }
+  policyTypes: ['Ingress']
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: payment-service } }
+        - podSelector: { matchLabels: { job-name: payment-db-backup } }
+      ports: [{ port: 5432 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-inventory-db
+  namespace: ecommerce
+spec:
+  podSelector: { matchLabels: { app: inventory-db } }
+  policyTypes: ['Ingress']
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: inventory-service } }
+        - podSelector: { matchLabels: { job-name: inventory-db-backup } }
+      ports: [{ port: 5432 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-auth-db
+  namespace: ecommerce
+spec:
+  podSelector: { matchLabels: { app: auth-db } }
+  policyTypes: ['Ingress']
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: auth-service } }
+        - podSelector: { matchLabels: { job-name: auth-db-backup } }
+      ports: [{ port: 5432 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-catalog-db
+  namespace: ecommerce
+spec:
+  podSelector: { matchLabels: { app: catalog-db } }
+  policyTypes: ['Ingress']
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: catalog-service } }
+        - podSelector: { matchLabels: { job-name: catalog-db-backup } }
+      ports: [{ port: 5432 }]
+---
+# Messaging backbone: every app service that publishes/consumes needs
+# RabbitMQ; only order-service (outbox-relay) and debezium-connect touch
+# Kafka; only Kafka talks to Zookeeper.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-rabbitmq
+  namespace: ecommerce
+spec:
+  podSelector: { matchLabels: { app: rabbitmq } }
+  policyTypes: ['Ingress']
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: order-service } }
+        - podSelector: { matchLabels: { app: payment-service } }
+        - podSelector: { matchLabels: { app: inventory-service } }
+        - podSelector: { matchLabels: { app: catalog-service } }
+        - podSelector: { matchLabels: { app: notification-service } }
+      ports: [{ port: 5672 }]
+    - from:
+        - podSelector: { matchLabels: { app: prometheus } }
+      ports: [{ port: 15692 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kafka
+  namespace: ecommerce
+spec:
+  podSelector: { matchLabels: { app: kafka } }
+  policyTypes: ['Ingress']
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: order-service } }
+        - podSelector: { matchLabels: { app: debezium-connect } }
+      ports: [{ port: 9092 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-zookeeper
+  namespace: ecommerce
+spec:
+  podSelector: { matchLabels: { app: zookeeper } }
+  policyTypes: ['Ingress']
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: kafka } }
+      ports: [{ port: 2181 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-debezium-connect
+  namespace: ecommerce
+spec:
+  podSelector: { matchLabels: { app: debezium-connect } }
+  policyTypes: ['Ingress']
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { job-name: register-outbox-connector } }
+      ports: [{ port: 8083 }]
+---
+# gateway-service is the single HTTP entry point behind the ingress
+# controller; only it (and Prometheus, for /metrics) may reach the
+# app services directly.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-from-ingress
+  namespace: ecommerce
+spec:
+  podSelector: { matchLabels: { app: gateway-service } }
+  policyTypes: ['Ingress']
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports: [{ port: 3000 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-app-services-from-gateway-and-prometheus
+  namespace: ecommerce
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values:
+          [
+            'auth-service',
+            'order-service',
+            'payment-service',
+            'inventory-service',
+            'catalog-service',
+            'notification-service',
+          ]
+  policyTypes: ['Ingress']
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: gateway-service } }
+        - podSelector: { matchLabels: { app: prometheus } }

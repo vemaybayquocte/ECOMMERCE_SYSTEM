@@ -1,0 +1,195 @@
+# Daily pg_dump backup for each service DB. A real deployment would ship
+# these to S3/GCS; on a local single-node cluster the closest useful
+# equivalent is a PVC that survives pod/node restarts, with old dumps
+# rotated out so the volume doesn't grow unbounded.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: db-backups-pvc
+  namespace: ecommerce
+spec:
+  accessModes: ['ReadWriteOnce']
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: order-db-backup
+  namespace: ecommerce
+spec:
+  schedule: '0 2 * * *'
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-dump
+              image: postgres:16-alpine
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: order-db-secret, key: POSTGRES_PASSWORD }
+              command:
+                - sh
+                - -c
+                - |
+                  set -e
+                  mkdir -p /backups/order-db
+                  pg_dump -h order-db -U postgres -d order_db \
+                    -f "/backups/order-db/order_db-$(date +%Y%m%d-%H%M%S).sql"
+                  # keep the 7 most recent dumps, drop the rest
+                  cd /backups/order-db && ls -1t *.sql | tail -n +8 | xargs -r rm --
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: db-backups-pvc
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: payment-db-backup
+  namespace: ecommerce
+spec:
+  schedule: '5 2 * * *'
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-dump
+              image: postgres:16-alpine
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: payment-db-secret, key: POSTGRES_PASSWORD }
+              command:
+                - sh
+                - -c
+                - |
+                  set -e
+                  mkdir -p /backups/payment-db
+                  pg_dump -h payment-db -U postgres -d payment_db \
+                    -f "/backups/payment-db/payment_db-$(date +%Y%m%d-%H%M%S).sql"
+                  cd /backups/payment-db && ls -1t *.sql | tail -n +8 | xargs -r rm --
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: db-backups-pvc
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: inventory-db-backup
+  namespace: ecommerce
+spec:
+  schedule: '10 2 * * *'
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-dump
+              image: postgres:16-alpine
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: inventory-db-secret, key: POSTGRES_PASSWORD }
+              command:
+                - sh
+                - -c
+                - |
+                  set -e
+                  mkdir -p /backups/inventory-db
+                  pg_dump -h inventory-db -U postgres -d inventory_db \
+                    -f "/backups/inventory-db/inventory_db-$(date +%Y%m%d-%H%M%S).sql"
+                  cd /backups/inventory-db && ls -1t *.sql | tail -n +8 | xargs -r rm --
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: db-backups-pvc
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: auth-db-backup
+  namespace: ecommerce
+spec:
+  schedule: '15 2 * * *'
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-dump
+              image: postgres:16-alpine
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: auth-db-secret, key: POSTGRES_PASSWORD }
+              command:
+                - sh
+                - -c
+                - |
+                  set -e
+                  mkdir -p /backups/auth-db
+                  pg_dump -h auth-db -U postgres -d auth_db \
+                    -f "/backups/auth-db/auth_db-$(date +%Y%m%d-%H%M%S).sql"
+                  cd /backups/auth-db && ls -1t *.sql | tail -n +8 | xargs -r rm --
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: db-backups-pvc
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: catalog-db-backup
+  namespace: ecommerce
+spec:
+  schedule: '20 2 * * *'
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-dump
+              image: postgres:16-alpine
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: catalog-db-secret, key: POSTGRES_PASSWORD }
+              command:
+                - sh
+                - -c
+                - |
+                  set -e
+                  mkdir -p /backups/catalog-db
+                  pg_dump -h catalog-db -U postgres -d catalog_db \
+                    -f "/backups/catalog-db/catalog_db-$(date +%Y%m%d-%H%M%S).sql"
+                  cd /backups/catalog-db && ls -1t *.sql | tail -n +8 | xargs -r rm --
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: db-backups-pvc
