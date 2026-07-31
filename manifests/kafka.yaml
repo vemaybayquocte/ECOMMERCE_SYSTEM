@@ -49,11 +49,15 @@ spec:
           ports:
             - containerPort: 9092
           env:
+            # Plain ClusterIP service, not an explicit per-pod list: this
+            # image's "zk-ready" preflight script word-splits a
+            # comma-separated multi-host value into separate shell
+            # arguments and crashes ("unrecognized arguments") - it only
+            # accepts a single host:port. The zookeeper Service already
+            # load-balances across all 3 ensemble members, so a broker
+            # still doesn't depend on any one specific Zookeeper pod.
             - name: KAFKA_ZOOKEEPER_CONNECT
-              value: >-
-                zookeeper-0.zookeeper-headless:2181,
-                zookeeper-1.zookeeper-headless:2181,
-                zookeeper-2.zookeeper-headless:2181
+              value: 'zookeeper:2181'
             - name: KAFKA_LISTENERS
               value: 'PLAINTEXT://0.0.0.0:9092'
             - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
