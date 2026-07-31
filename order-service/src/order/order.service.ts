@@ -1,10 +1,19 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
+import { AmqpConnection } from '@golevelup/nestjs-rabbitmq';
 import { CreateOrderDto } from './dto/create-order.dto';
-import { Order } from './entities/order.entity';
+import { Order, OrderItem } from './entities/order.entity';
 import { OutboxEvent } from './entities/outbox-event.entity';
 import { OrderCreatedEvent } from './events/order-created.event';
+
+const EXCHANGE = 'ecommerce.events';
+const CATALOG_RPC_TIMEOUT_MS = 10_000;
+
+interface GetPricesResult {
+  prices: { productId: string; price: number }[];
+  missing: string[];
+}
 
 @Injectable()
 export class OrderService {
@@ -13,10 +22,12 @@ export class OrderService {
   constructor(
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    private readonly amqpConnection: AmqpConnection,
   ) {}
 
   async createOrder(dto: CreateOrderDto): Promise<Order> {
-    const total = dto.items.reduce(
+    const items = await this.priceItems(dto.items);
+    const total = items.reduce(
       (sum, item) => sum + item.price * item.quantity,
       0,
     );
@@ -26,7 +37,7 @@ export class OrderService {
         Order,
         manager.create(Order, {
           customerId: dto.customerId,
-          items: dto.items,
+          items,
           total,
         }),
       );
@@ -58,5 +69,47 @@ export class OrderService {
 
       return order;
     });
+  }
+
+  // Looks up the authoritative price per productId from catalog-service
+  // instead of trusting whatever the client sends - a client could
+  // otherwise set an arbitrary price on any item.
+  private async priceItems(
+    items: { productId: string; quantity: number }[],
+  ): Promise<OrderItem[]> {
+    const productIds = items.map((item) => item.productId);
+
+    let result: GetPricesResult;
+    try {
+      result = await this.amqpConnection.request<GetPricesResult>({
+        exchange: EXCHANGE,
+        routingKey: 'catalog.get-prices',
+        payload: { productIds },
+        timeout: CATALOG_RPC_TIMEOUT_MS,
+      });
+    } catch (err) {
+      this.logger.error(
+        `catalog.get-prices RPC failed: ${(err as Error).message}`,
+      );
+      throw new BadRequestException(
+        'Unable to verify product prices right now',
+      );
+    }
+
+    if (result.missing.length > 0) {
+      throw new BadRequestException(
+        `Unknown product(s): ${result.missing.join(', ')}`,
+      );
+    }
+
+    const priceByProductId = new Map(
+      result.prices.map((p) => [p.productId, p.price]),
+    );
+
+    return items.map((item) => ({
+      productId: item.productId,
+      quantity: item.quantity,
+      price: priceByProductId.get(item.productId) as number,
+    }));
   }
 }

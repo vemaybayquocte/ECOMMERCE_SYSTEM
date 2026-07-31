@@ -2,12 +2,18 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AmqpConnection, RabbitSubscribe } from '@golevelup/nestjs-rabbitmq';
+import * as CircuitBreaker from 'opossum';
 import { Order, OrderStatus } from '../order/entities/order.entity';
 import { OrderCreatedEvent } from '../order/events/order-created.event';
 import { InventoryRpcResult, PaymentResultEvent } from './events';
 
 const EXCHANGE = 'ecommerce.events';
 const RPC_TIMEOUT_MS = 10_000;
+
+interface InventoryRpcRequest {
+  routingKey: 'inventory.reserve' | 'inventory.confirm' | 'inventory.release';
+  payload: Record<string, unknown>;
+}
 
 /**
  * Orchestrated saga for "create order": reserve inventory -> request payment
@@ -25,12 +31,34 @@ const RPC_TIMEOUT_MS = 10_000;
 @Injectable()
 export class SagaOrchestratorService {
   private readonly logger = new Logger(SagaOrchestratorService.name);
+  // One breaker per inventory RPC operation: a burst of reserve failures
+  // (e.g. inventory-service down) shouldn't make every order wait out the
+  // full 10s RPC timeout — once the failure rate crosses the threshold the
+  // breaker opens and rejects instantly until inventory-service recovers.
+  private readonly breaker = new CircuitBreaker<
+    [InventoryRpcRequest],
+    InventoryRpcResult
+  >((req) => this.callInventory(req), {
+    timeout: RPC_TIMEOUT_MS + 1_000,
+    errorThresholdPercentage: 50,
+    resetTimeout: 10_000,
+    rollingCountTimeout: 10_000,
+  });
 
   constructor(
     @InjectRepository(Order)
     private readonly orderRepository: Repository<Order>,
     private readonly amqpConnection: AmqpConnection,
   ) {}
+
+  private callInventory(req: InventoryRpcRequest): Promise<InventoryRpcResult> {
+    return this.amqpConnection.request<InventoryRpcResult>({
+      exchange: EXCHANGE,
+      routingKey: req.routingKey,
+      payload: req.payload,
+      timeout: RPC_TIMEOUT_MS,
+    });
+  }
 
   @RabbitSubscribe({
     exchange: EXCHANGE,
@@ -43,11 +71,9 @@ export class SagaOrchestratorService {
 
     let reserveResult: InventoryRpcResult;
     try {
-      reserveResult = await this.amqpConnection.request<InventoryRpcResult>({
-        exchange: EXCHANGE,
+      reserveResult = await this.breaker.fire({
         routingKey: 'inventory.reserve',
         payload: { orderId: event.orderId, items: event.items },
-        timeout: RPC_TIMEOUT_MS,
       });
     } catch (err) {
       this.logger.error(
@@ -89,11 +115,9 @@ export class SagaOrchestratorService {
   })
   async handlePaymentSucceeded(event: PaymentResultEvent): Promise<void> {
     try {
-      const result = await this.amqpConnection.request<InventoryRpcResult>({
-        exchange: EXCHANGE,
+      const result = await this.breaker.fire({
         routingKey: 'inventory.confirm',
         payload: { orderId: event.orderId },
-        timeout: RPC_TIMEOUT_MS,
       });
 
       if (!result.success) {
@@ -123,11 +147,9 @@ export class SagaOrchestratorService {
   })
   async handlePaymentFailed(event: PaymentResultEvent): Promise<void> {
     try {
-      await this.amqpConnection.request<InventoryRpcResult>({
-        exchange: EXCHANGE,
+      await this.breaker.fire({
         routingKey: 'inventory.release',
         payload: { orderId: event.orderId },
-        timeout: RPC_TIMEOUT_MS,
       });
     } catch (err) {
       this.logger.error(
@@ -141,15 +163,43 @@ export class SagaOrchestratorService {
     );
   }
 
-  private async setStatus(
-    orderId: string,
-    status: OrderStatus,
-  ): Promise<void> {
+  private async setStatus(orderId: string, status: OrderStatus): Promise<void> {
     try {
       await this.orderRepository.update({ id: orderId }, { status });
     } catch (err) {
       this.logger.error(
         `Failed to update order ${orderId} status to ${status}: ${(err as Error).message}`,
+      );
+      return;
+    }
+
+    // Only notify on terminal outcomes - INVENTORY_RESERVED is an
+    // intermediate step, not something worth telling the customer about.
+    if (status === OrderStatus.COMPLETED || status === OrderStatus.CANCELLED) {
+      await this.publishStatusChanged(orderId, status);
+    }
+  }
+
+  private async publishStatusChanged(
+    orderId: string,
+    status: OrderStatus,
+  ): Promise<void> {
+    try {
+      const order = await this.orderRepository.findOne({
+        where: { id: orderId },
+      });
+      if (!order) {
+        return;
+      }
+
+      await this.amqpConnection.publish(EXCHANGE, 'order.status-changed', {
+        orderId,
+        customerId: order.customerId,
+        status,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to publish order.status-changed for order ${orderId}: ${(err as Error).message}`,
       );
     }
   }

@@ -5,7 +5,12 @@ metadata:
   namespace: ecommerce
 spec:
   backoffLimit: 100
-  ttlSecondsAfterFinished: 300
+  # No ttlSecondsAfterFinished: with a TTL, the K8s TTL controller deletes
+  # the completed Job a few minutes after success, so the next ArgoCD sync
+  # sees the manifest's Job "missing" from live state and recreates it —
+  # an endless (harmless but noisy) re-run loop. Leaving the completed Job
+  # object in place keeps it matching desired state, so ArgoCD stops
+  # touching it once it has run successfully.
   template:
     spec:
       restartPolicy: OnFailure

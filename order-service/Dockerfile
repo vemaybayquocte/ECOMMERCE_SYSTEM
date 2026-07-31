@@ -2,7 +2,7 @@
 FROM node:22-alpine AS deps
 WORKDIR /app
 COPY package.json yarn.lock ./
-RUN yarn install --frozen-lockfile
+RUN yarn install --frozen-lockfile --network-timeout 600000
 
 # ---- build: compile TypeScript -> dist ----
 FROM node:22-alpine AS build
@@ -15,7 +15,7 @@ RUN yarn build
 FROM node:22-alpine AS prod-deps
 WORKDIR /app
 COPY package.json yarn.lock ./
-RUN yarn install --frozen-lockfile --production && yarn cache clean
+RUN yarn install --frozen-lockfile --network-timeout 600000 --production && yarn cache clean
 
 # ---- runtime: minimal final image ----
 FROM node:22-alpine AS runtime

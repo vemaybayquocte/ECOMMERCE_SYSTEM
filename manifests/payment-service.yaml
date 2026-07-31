@@ -5,6 +5,7 @@ metadata:
   namespace: ecommerce
 data:
   PORT: '3002'
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
   DB_HOST: payment-db
   DB_PORT: '5432'
   DB_NAME: payment_db

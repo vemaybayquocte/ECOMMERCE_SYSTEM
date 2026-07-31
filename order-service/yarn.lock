@@ -1906,6 +1906,13 @@
   dependencies:
     undici-types "~6.21.0"
 
+"@types/opossum@^8.1.9":
+  version "8.1.9"
+  resolved "https://registry.yarnpkg.com/@types/opossum/-/opossum-8.1.9.tgz#a6309691a3fee3d93452acbb0b7e1eb244724b17"
+  integrity sha512-Jm/tYxuJFefiwRYs+/EOsUP3ktk0c8siMgAHPLnA4PXF4wKghzcjqf88dY+Xii5jId5Txw4JV0FMKTpjbd7KJA==
+  dependencies:
+    "@types/node" "*"
+
 "@types/oracledb@6.5.2":
   version "6.5.2"
   resolved "https://registry.yarnpkg.com/@types/oracledb/-/oracledb-6.5.2.tgz#194cd0f13436f9e1e744a6e5e056a7ca400536d5"
@@ -5093,6 +5100,11 @@ onetime@^5.1.0, onetime@^5.1.2:
   integrity sha512-kbpaSSGJTWdAY5KPVeMOKXSrPtr8C8C7wodJbcsd51jRnmD+GZu8Y0VoU6Dm5Z4vWr0Ig/1NKuWRKf7j5aaYSg==
   dependencies:
     mimic-fn "^2.1.0"
+
+opossum@^10.0.0:
+  version "10.0.0"
+  resolved "https://registry.yarnpkg.com/opossum/-/opossum-10.0.0.tgz#fdcfa1e48c04ae8fa4338df68123a0aa8d6fa340"
+  integrity sha512-sghtqL8Usj+et06Zui0nyn0R6FFsl7cyuoU+d7MctYU0nbS7Htzjleh+tWohFqk1Rp1srrFwbFa8Vxd0O64w6A==
 
 optionator@^0.9.3:
   version "0.9.4"

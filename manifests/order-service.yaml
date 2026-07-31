@@ -5,6 +5,7 @@ metadata:
   namespace: ecommerce
 data:
   PORT: '3001'
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
   DB_HOST: order-db
   DB_PORT: '5432'
   DB_NAME: order_db
@@ -45,12 +46,7 @@ spec:
                 secretKeyRef: { name: order-db-secret, key: POSTGRES_PASSWORD }
             - name: JWT_SECRET
               valueFrom:
-                secretKeyRef:
-                  { name: order-service-auth-secret, key: JWT_SECRET }
-            - name: DEMO_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  { name: order-service-auth-secret, key: DEMO_API_KEY }
+                secretKeyRef: { name: jwt-secret, key: JWT_SECRET }
           resources:
             requests: { memory: '200Mi', cpu: '100m' }
             limits: { memory: '400Mi', cpu: '500m' }

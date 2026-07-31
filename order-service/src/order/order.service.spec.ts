@@ -1,5 +1,7 @@
+import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
+import { AmqpConnection } from '@golevelup/nestjs-rabbitmq';
 import { OrderService } from './order.service';
 import { Order } from './entities/order.entity';
 import { OutboxEvent } from './entities/outbox-event.entity';
@@ -8,6 +10,7 @@ describe('OrderService', () => {
   let service: OrderService;
   let manager: { create: jest.Mock; save: jest.Mock };
   let dataSource: { transaction: jest.Mock };
+  let amqpConnection: { request: jest.Mock };
 
   beforeEach(async () => {
     manager = {
@@ -17,15 +20,31 @@ describe('OrderService', () => {
     dataSource = {
       transaction: jest.fn((cb) => cb(manager)),
     };
+    // Default: catalog-service knows every product this suite creates,
+    // priced at 100 - individual tests override this as needed.
+    amqpConnection = {
+      request: jest.fn().mockResolvedValue({
+        prices: [
+          { productId: 'p1', price: 100 },
+          { productId: 'p2', price: 50 },
+          { productId: 'p3', price: 10 },
+        ],
+        missing: [],
+      }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [OrderService, { provide: DataSource, useValue: dataSource }],
+      providers: [
+        OrderService,
+        { provide: DataSource, useValue: dataSource },
+        { provide: AmqpConnection, useValue: amqpConnection },
+      ],
     }).compile();
 
     service = module.get(OrderService);
   });
 
-  it('computes total from items and persists the Order via the transactional manager', async () => {
+  it('looks up real prices from catalog-service and computes the total from them', async () => {
     const savedOrder = {
       id: 'order-1',
       customerId: 'c1',
@@ -36,14 +55,52 @@ describe('OrderService', () => {
 
     const result = await service.createOrder({
       customerId: 'c1',
-      items: [{ productId: 'p1', quantity: 2, price: 100 }],
+      items: [{ productId: 'p1', quantity: 2 }],
     });
 
+    expect(amqpConnection.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        routingKey: 'catalog.get-prices',
+        payload: { productIds: ['p1'] },
+      }),
+    );
     expect(result).toBe(savedOrder);
+    // total = 2 * 100 (the price catalog-service returned), never the
+    // client's own input - the DTO no longer even accepts a price field.
     expect(manager.create).toHaveBeenCalledWith(
       Order,
-      expect.objectContaining({ customerId: 'c1', total: 200 }),
+      expect.objectContaining({
+        customerId: 'c1',
+        total: 200,
+        items: [{ productId: 'p1', quantity: 2, price: 100 }],
+      }),
     );
+  });
+
+  it('rejects the order if catalog-service reports an unknown product', async () => {
+    amqpConnection.request.mockResolvedValue({
+      prices: [],
+      missing: ['p-unknown'],
+    });
+
+    await expect(
+      service.createOrder({
+        customerId: 'c1',
+        items: [{ productId: 'p-unknown', quantity: 1 }],
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects the order if the catalog.get-prices RPC itself fails', async () => {
+    amqpConnection.request.mockRejectedValue(new Error('RPC timeout'));
+
+    await expect(
+      service.createOrder({
+        customerId: 'c1',
+        items: [{ productId: 'p1', quantity: 1 }],
+      }),
+    ).rejects.toThrow(BadRequestException);
   });
 
   it('writes the OutboxEvent in the SAME transaction as the Order (atomicity)', async () => {
@@ -57,7 +114,7 @@ describe('OrderService', () => {
 
     await service.createOrder({
       customerId: 'c2',
-      items: [{ productId: 'p2', quantity: 1, price: 50 }],
+      items: [{ productId: 'p2', quantity: 1 }],
     });
 
     expect(dataSource.transaction).toHaveBeenCalledTimes(1);
@@ -89,7 +146,7 @@ describe('OrderService', () => {
     await expect(
       service.createOrder({
         customerId: 'c3',
-        items: [{ productId: 'p3', quantity: 1, price: 10 }],
+        items: [{ productId: 'p3', quantity: 1 }],
       }),
     ).rejects.toThrow('DB error on outbox insert');
   });

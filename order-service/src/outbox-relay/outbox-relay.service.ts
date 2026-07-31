@@ -27,6 +27,8 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
   private consumer: Consumer;
   private readonly exchange: string;
   private readonly topic = 'outbox.event.Order';
+  private destroyed = false;
+  private readonly maxBackoffMs = 30_000;
 
   constructor(
     private readonly amqpConnection: AmqpConnection,
@@ -44,48 +46,85 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  async onModuleInit() {
-    this.consumer = this.kafka.consumer({ groupId: 'outbox-relay' });
-    await this.consumer.connect();
-    await this.consumer.subscribe({ topic: this.topic, fromBeginning: false });
+  onModuleInit() {
+    // Fire-and-forget: connecting to Kafka must never block app bootstrap
+    // (HTTP/health/metrics should come up even if Kafka isn't reachable yet),
+    // and any rejection here must never escape as an unhandled promise
+    // rejection — that's what used to crash the whole process once kafkajs
+    // exhausted its internal connect retries.
+    void this.connectWithRetry();
+  }
 
-    await this.consumer.run({
-      eachMessage: async ({ message }) => {
-        if (!message.value) {
-          return;
-        }
+  private async connectWithRetry(attempt = 0): Promise<void> {
+    if (this.destroyed) {
+      return;
+    }
 
-        // Debezium represents the jsonb `payload` column as an opaque
-        // string (not a nested struct), so the Outbox Event Router emits
-        // that string as-is: with JsonConverter this comes across the wire
-        // JSON-double-encoded (a JSON string containing JSON text). Parse
-        // twice to unwrap it either way.
-        let event = JSON.parse(message.value.toString());
-        if (typeof event === 'string') {
-          event = JSON.parse(event);
-        }
-
-        // This topic only ever carries 'order.created' events today (the
-        // Outbox Event Router routes purely by aggregateType -> topic name).
-        // If more Order event types are added later, route by eventType
-        // instead of hardcoding this — e.g. via table.fields.additional.placement
-        // to expose it as a Kafka header.
-        await this.amqpConnection.publish(
-          this.exchange,
-          'order.created',
-          event,
+    try {
+      this.consumer = this.kafka.consumer({ groupId: 'outbox-relay' });
+      this.consumer.on(this.consumer.events.CRASH, ({ payload }) => {
+        this.logger.error(
+          `Outbox relay consumer crashed: ${payload.error.message}`,
         );
+        // kafkajs auto-recovers when payload.restart is true; otherwise we
+        // have to reconnect ourselves.
+        if (!payload.restart && !this.destroyed) {
+          void this.connectWithRetry();
+        }
+      });
 
-        this.logger.log(
-          `Relayed outbox event for order ${event.orderId} to RabbitMQ`,
-        );
-      },
-    });
+      await this.consumer.connect();
+      await this.consumer.subscribe({
+        topic: this.topic,
+        fromBeginning: false,
+      });
 
-    this.logger.log(`Outbox relay subscribed to Kafka topic "${this.topic}"`);
+      await this.consumer.run({
+        eachMessage: async ({ message }) => {
+          if (!message.value) {
+            return;
+          }
+
+          // Debezium represents the jsonb `payload` column as an opaque
+          // string (not a nested struct), so the Outbox Event Router emits
+          // that string as-is: with JsonConverter this comes across the wire
+          // JSON-double-encoded (a JSON string containing JSON text). Parse
+          // twice to unwrap it either way.
+          let event = JSON.parse(message.value.toString());
+          if (typeof event === 'string') {
+            event = JSON.parse(event);
+          }
+
+          // This topic only ever carries 'order.created' events today (the
+          // Outbox Event Router routes purely by aggregateType -> topic name).
+          // If more Order event types are added later, route by eventType
+          // instead of hardcoding this — e.g. via table.fields.additional.placement
+          // to expose it as a Kafka header.
+          await this.amqpConnection.publish(
+            this.exchange,
+            'order.created',
+            event,
+          );
+
+          this.logger.log(
+            `Relayed outbox event for order ${event.orderId} to RabbitMQ`,
+          );
+        },
+      });
+
+      this.logger.log(`Outbox relay subscribed to Kafka topic "${this.topic}"`);
+    } catch (err) {
+      const backoff = Math.min(1000 * 2 ** attempt, this.maxBackoffMs);
+      this.logger.warn(
+        `Outbox relay failed to connect to Kafka (attempt ${attempt + 1}): ${(err as Error).message}. Retrying in ${backoff}ms`,
+      );
+      await this.consumer?.disconnect().catch(() => undefined);
+      setTimeout(() => void this.connectWithRetry(attempt + 1), backoff);
+    }
   }
 
   async onModuleDestroy() {
+    this.destroyed = true;
     await this.consumer?.disconnect();
   }
 }

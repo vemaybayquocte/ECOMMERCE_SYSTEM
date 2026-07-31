@@ -2,10 +2,14 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
-import { AuthController } from './auth.controller';
-import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
 
+/**
+ * Verification-only: order-service no longer issues tokens itself (the demo
+ * API-key login is gone). Real login/register now lives in auth-service —
+ * this module just needs the same JWT_SECRET to independently verify tokens
+ * auth-service signed, stateless, no RPC back to auth-service required.
+ */
 @Module({
   imports: [
     PassportModule,
@@ -18,8 +22,7 @@ import { JwtStrategy } from './jwt.strategy';
       }),
     }),
   ],
-  controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
+  providers: [JwtStrategy],
   exports: [JwtModule, PassportModule],
 })
 export class AuthModule {}
