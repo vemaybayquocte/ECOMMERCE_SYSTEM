@@ -1,0 +1,75 @@
+# Without these, a voluntary disruption (node drain, `kubectl drain`,
+# cluster upgrade) is free to evict every replica of a "HA" component at
+# once - the 3-node clusters and multi-replica app services would still
+# have a single point of failure in practice, just not an obvious one.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rabbitmq-pdb
+  namespace: ecommerce
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: { app: rabbitmq }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kafka-pdb
+  namespace: ecommerce
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: { app: kafka }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: zookeeper-pdb
+  namespace: ecommerce
+spec:
+  # 2 of 3 is also ZooKeeper's own quorum requirement - losing a 2nd node
+  # to a voluntary disruption would break the ensemble anyway.
+  minAvailable: 2
+  selector:
+    matchLabels: { app: zookeeper }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: order-service-pdb
+  namespace: ecommerce
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: order-service }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: payment-service-pdb
+  namespace: ecommerce
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: payment-service }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: inventory-service-pdb
+  namespace: ecommerce
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: inventory-service }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gateway-service-pdb
+  namespace: ecommerce
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: gateway-service }

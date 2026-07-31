@@ -1,18 +1,87 @@
+# RBAC: rabbitmq_peer_discovery_k8s needs to list/watch this namespace's
+# Endpoints to find its own cluster peers (the other rabbitmq-N pods
+# behind the headless service below).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rabbitmq
+  namespace: ecommerce
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rabbitmq-peer-discovery
+  namespace: ecommerce
+rules:
+  - apiGroups: ['']
+    resources: ['endpoints']
+    verbs: ['get', 'list', 'watch']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rabbitmq-peer-discovery
+  namespace: ecommerce
+subjects:
+  - kind: ServiceAccount
+    name: rabbitmq
+roleRef:
+  kind: Role
+  name: rabbitmq-peer-discovery
+  apiGroup: rbac.authorization.k8s.io
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: rabbitmq-plugins
   namespace: ecommerce
 data:
-  enabled_plugins: '[rabbitmq_management,rabbitmq_prometheus].'
+  enabled_plugins: '[rabbitmq_management,rabbitmq_prometheus,rabbitmq_peer_discovery_k8s].'
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-config
+  namespace: ecommerce
+data:
+  rabbitmq.conf: |
+    cluster_formation.peer_discovery_backend = rabbit_peer_discovery_k8s
+    cluster_formation.k8s.host = kubernetes.default.svc.cluster.local
+    cluster_formation.k8s.address_type = hostname
+    cluster_formation.k8s.service_name = rabbitmq-headless
+    cluster_formation.k8s.hostname_suffix = .rabbitmq-headless.ecommerce.svc.cluster.local
+    cluster_formation.node_cleanup.interval = 30
+    cluster_formation.node_cleanup.only_log_warning = true
+    cluster_partition_handling = autoheal
+    queue_master_locator = min-masters
+---
+# Headless service: gives each node a stable DNS name
+# (rabbitmq-N.rabbitmq-headless.ecommerce.svc.cluster.local) - both for
+# peer discovery to find every node, and for each node's own long Erlang
+# node name.
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq-headless
+  namespace: ecommerce
+spec:
+  clusterIP: None
+  selector:
+    app: rabbitmq
+  ports:
+    - { name: amqp, port: 5672, targetPort: 5672 }
+    - { name: management, port: 15672, targetPort: 15672 }
+    - { name: epmd, port: 4369, targetPort: 4369 }
+    - { name: cluster-rpc, port: 25672, targetPort: 25672 }
 ---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: rabbitmq
   namespace: ecommerce
 spec:
-  replicas: 1
+  serviceName: rabbitmq-headless
+  replicas: 3
   selector:
     matchLabels:
       app: rabbitmq
@@ -21,6 +90,7 @@ spec:
       labels:
         app: rabbitmq
     spec:
+      serviceAccountName: rabbitmq
       containers:
         - name: rabbitmq
           image: rabbitmq:3.13-management-alpine
@@ -28,6 +98,8 @@ spec:
             - containerPort: 5672
             - containerPort: 15672
             - containerPort: 15692
+            - containerPort: 4369
+            - containerPort: 25672
           env:
             - name: RABBITMQ_DEFAULT_USER
               valueFrom:
@@ -35,10 +107,31 @@ spec:
             - name: RABBITMQ_DEFAULT_PASS
               valueFrom:
                 secretKeyRef: { name: rabbitmq-secret, key: RABBITMQ_DEFAULT_PASS }
+            - name: RABBITMQ_ERLANG_COOKIE
+              valueFrom:
+                secretKeyRef: { name: rabbitmq-secret, key: RABBITMQ_ERLANG_COOKIE }
+            # Long node names so peer discovery can address nodes by their
+            # full per-pod DNS name across the headless service.
+            - name: RABBITMQ_USE_LONGNAME
+              value: 'true'
+            - name: K8S_HOSTNAME_SUFFIX
+              value: '.rabbitmq-headless.ecommerce.svc.cluster.local'
+          # RABBITMQ_NODENAME is per-pod: StatefulSet pods get a stable
+          # ordinal suffix (rabbitmq-0/1/2), so the node name is derived
+          # from it instead of hardcoding 3 near-duplicate manifests.
+          command:
+            - sh
+            - -exc
+            - |
+              export RABBITMQ_NODENAME="rabbit@${HOSTNAME}${K8S_HOSTNAME_SUFFIX}"
+              exec docker-entrypoint.sh rabbitmq-server
           volumeMounts:
             - name: plugins
               mountPath: /etc/rabbitmq/enabled_plugins
               subPath: enabled_plugins
+            - name: config
+              mountPath: /etc/rabbitmq/conf.d/10-cluster.conf
+              subPath: rabbitmq.conf
           readinessProbe:
             # rabbitmq-diagnostics ping does a real distributed Erlang RPC
             # call - the default 1s probe timeout is too tight for that
@@ -47,13 +140,19 @@ spec:
             # when the broker was perfectly fine.
             exec:
               command: ['rabbitmq-diagnostics', '-q', 'ping']
-            initialDelaySeconds: 10
+            initialDelaySeconds: 15
             periodSeconds: 10
             timeoutSeconds: 10
+          resources:
+            requests: { memory: '384Mi', cpu: '150m' }
+            limits: { memory: '640Mi', cpu: '750m' }
       volumes:
         - name: plugins
           configMap:
             name: rabbitmq-plugins
+        - name: config
+          configMap:
+            name: rabbitmq-config
 ---
 apiVersion: v1
 kind: Service
@@ -73,3 +172,52 @@ spec:
     - name: metrics
       port: 15692
       targetPort: 15692
+---
+# Runs once the cluster has formed: without this, every queue this system
+# declares (@RabbitSubscribe/@RabbitRPC) is a classic queue that lives on
+# exactly one node even though the nodes are clustered - killing that one
+# node loses the queue's messages until it comes back. Quorum queues
+# replicate across the cluster, so the saga/payment/inventory queues
+# survive any single node going down.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rabbitmq-set-ha-policy
+  namespace: ecommerce
+spec:
+  backoffLimit: 100
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: set-policy
+          image: rabbitmq:3.13-management-alpine
+          env:
+            - name: RABBITMQ_ERLANG_COOKIE
+              valueFrom:
+                secretKeyRef: { name: rabbitmq-secret, key: RABBITMQ_ERLANG_COOKIE }
+          command:
+            - sh
+            - -c
+            - |
+              set -u
+              # rabbitmqctl authenticates to the target node over
+              # distributed Erlang, which requires the same cookie the
+              # cluster nodes use - write it ourselves since this
+              # container never goes through the server's own entrypoint.
+              export HOME=/tmp
+              echo -n "$RABBITMQ_ERLANG_COOKIE" > "$HOME/.erlang.cookie"
+              chmod 400 "$HOME/.erlang.cookie"
+              i=1
+              while [ "$i" -le 60 ]; do
+                if rabbitmqctl --node rabbit@rabbitmq-0.rabbitmq-headless.ecommerce.svc.cluster.local \
+                     set_policy ha-quorum "^" '{"queue-type":"quorum"}' --apply-to queues 2>&1; then
+                  echo "policy applied"
+                  exit 0
+                fi
+                echo "Attempt $i: cluster not ready yet, retrying..."
+                i=$((i + 1))
+                sleep 10
+              done
+              echo "Failed to apply HA policy after 60 attempts"
+              exit 1

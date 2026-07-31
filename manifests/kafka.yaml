@@ -1,10 +1,32 @@
+# Headless service: gives each broker a stable DNS name
+# (kafka-N.kafka-headless.ecommerce.svc.cluster.local) so KAFKA_BROKER_ID
+# and KAFKA_ADVERTISED_LISTENERS can be derived per-pod instead of assuming
+# a single shared hostname.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-headless
+  namespace: ecommerce
+spec:
+  clusterIP: None
+  selector:
+    app: kafka
+  ports:
+    - port: 9092
+      targetPort: 9092
+---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: kafka
   namespace: ecommerce
 spec:
-  replicas: 1
+  serviceName: kafka-headless
+  replicas: 3
+  # See zookeeper.yaml for why: brokers don't need each other Ready to
+  # start (only Zookeeper reachable), so there's no deadlock risk here,
+  # but Parallel still gets all 3 up at once instead of one at a time.
+  podManagementPolicy: Parallel
   selector:
     matchLabels:
       app: kafka
@@ -27,24 +49,24 @@ spec:
           ports:
             - containerPort: 9092
           env:
-            - name: KAFKA_BROKER_ID
-              value: '1'
             - name: KAFKA_ZOOKEEPER_CONNECT
-              value: 'zookeeper:2181'
-            # Single internal listener: everything that talks to Kafka here
-            # (order-service, debezium-connect) runs inside the cluster, so
-            # there's no need for the dual host/container listener setup
-            # used in the local docker-compose stack.
-            - name: KAFKA_ADVERTISED_LISTENERS
-              value: 'PLAINTEXT://kafka:9092'
+              value: >-
+                zookeeper-0.zookeeper-headless:2181,
+                zookeeper-1.zookeeper-headless:2181,
+                zookeeper-2.zookeeper-headless:2181
             - name: KAFKA_LISTENERS
               value: 'PLAINTEXT://0.0.0.0:9092'
             - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
               value: 'PLAINTEXT:PLAINTEXT'
             - name: KAFKA_INTER_BROKER_LISTENER_NAME
               value: 'PLAINTEXT'
+            # 3 brokers, so the offsets topic and any auto-created topic
+            # (e.g. the outbox event topic) survive one broker going down
+            # instead of only ever having a single copy.
             - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
-              value: '1'
+              value: '3'
+            - name: KAFKA_DEFAULT_REPLICATION_FACTOR
+              value: '3'
             - name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS
               value: '0'
             # Cap the JVM heap explicitly: without this the broker sizes its
@@ -53,14 +75,26 @@ spec:
             # kills on a resource-constrained Minikube node.
             - name: KAFKA_HEAP_OPTS
               value: '-Xmx512M -Xms512M'
+          # KAFKA_BROKER_ID and KAFKA_ADVERTISED_LISTENERS are per-broker:
+          # StatefulSet pods get a stable ordinal suffix (kafka-0/1/2), so
+          # both are derived from it instead of hardcoding 3 near-duplicate
+          # manifests.
+          command:
+            - sh
+            - -exc
+            - |
+              export KAFKA_BROKER_ID=${HOSTNAME##*-}
+              export KAFKA_ADVERTISED_LISTENERS="PLAINTEXT://${HOSTNAME}.kafka-headless:9092"
+              exec /etc/confluent/docker/run
           resources:
             requests: { memory: '640Mi', cpu: '250m' }
             limits: { memory: '900Mi', cpu: '1' }
           readinessProbe:
             tcpSocket:
               port: 9092
-            initialDelaySeconds: 15
+            initialDelaySeconds: 20
             periodSeconds: 10
+            timeoutSeconds: 5
 ---
 apiVersion: v1
 kind: Service

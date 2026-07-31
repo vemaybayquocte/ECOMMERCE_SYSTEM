@@ -1,10 +1,35 @@
+# Headless service: gives each pod a stable DNS name
+# (zookeeper-N.zookeeper-headless.ecommerce.svc.cluster.local) so ensemble
+# members can find each other, and so Kafka can list all 3 explicitly
+# instead of depending on a single load-balanced ClusterIP.
+apiVersion: v1
+kind: Service
+metadata:
+  name: zookeeper-headless
+  namespace: ecommerce
+spec:
+  clusterIP: None
+  selector:
+    app: zookeeper
+  ports:
+    - { name: client, port: 2181, targetPort: 2181 }
+    - { name: peer, port: 2888, targetPort: 2888 }
+    - { name: leader-election, port: 3888, targetPort: 3888 }
+---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: zookeeper
   namespace: ecommerce
 spec:
-  replicas: 1
+  serviceName: zookeeper-headless
+  replicas: 3
+  # The default OrderedReady policy waits for zookeeper-0 to become Ready
+  # before even creating zookeeper-1 - but zookeeper-0 can't become Ready
+  # without a quorum of peers already reachable, and those peers don't
+  # exist yet. Parallel creates all 3 at once so they can actually form
+  # quorum together.
+  podManagementPolicy: Parallel
   selector:
     matchLabels:
       app: zookeeper
@@ -21,13 +46,40 @@ spec:
           image: confluentinc/cp-zookeeper:7.5.3
           ports:
             - containerPort: 2181
+            - containerPort: 2888
+            - containerPort: 3888
           env:
             - name: ZOOKEEPER_CLIENT_PORT
               value: '2181'
             - name: ZOOKEEPER_TICK_TIME
               value: '2000'
+            - name: ZOOKEEPER_INIT_LIMIT
+              value: '5'
+            - name: ZOOKEEPER_SYNC_LIMIT
+              value: '2'
+            # All 3 ensemble members, by stable per-pod DNS name from the
+            # headless service above.
+            - name: ZOOKEEPER_SERVERS
+              value: >-
+                zookeeper-0.zookeeper-headless:2888:3888;2181,
+                zookeeper-1.zookeeper-headless:2888:3888;2181,
+                zookeeper-2.zookeeper-headless:2888:3888;2181
             - name: KAFKA_HEAP_OPTS
               value: '-Xmx256M -Xms256M'
+          # ZOOKEEPER_SERVER_ID must be unique per ensemble member (1-3).
+          # StatefulSet pods get a stable ordinal suffix (zookeeper-0/1/2),
+          # so we derive the ID from it instead of hardcoding per-pod config.
+          command:
+            - sh
+            - -exc
+            - |
+              export ZOOKEEPER_SERVER_ID=$((${HOSTNAME##*-} + 1))
+              exec /etc/confluent/docker/run
+          readinessProbe:
+            tcpSocket: { port: 2181 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
           resources:
             requests: { memory: '320Mi', cpu: '100m' }
             limits: { memory: '450Mi', cpu: '500m' }

@@ -33,12 +33,15 @@ spec:
               value: 'debezium_connect_offsets'
             - name: STATUS_STORAGE_TOPIC
               value: 'debezium_connect_status'
+            # 3 brokers now available (kafka.yaml) - Kafka Connect's own
+            # config/offset/status topics should survive one broker being
+            # down too, same reasoning as KAFKA_DEFAULT_REPLICATION_FACTOR.
             - name: CONFIG_STORAGE_REPLICATION_FACTOR
-              value: '1'
+              value: '3'
             - name: OFFSET_STORAGE_REPLICATION_FACTOR
-              value: '1'
+              value: '3'
             - name: STATUS_STORAGE_REPLICATION_FACTOR
-              value: '1'
+              value: '3'
             - name: KAFKA_HEAP_OPTS
               value: '-Xmx512M -Xms512M'
           resources:
