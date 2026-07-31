@@ -58,12 +58,16 @@ spec:
             - name: ZOOKEEPER_SYNC_LIMIT
               value: '2'
             # All 3 ensemble members, by stable per-pod DNS name from the
-            # headless service above.
+            # headless service above. Semicolon-separated, NOT comma - the
+            # Confluent config script treats the whole comma-separated
+            # string as one value (produced a single "server.1=a,b,c" line
+            # instead of 3 separate server.N lines), and an earlier
+            # semicolon-per-entry client-port suffix (";2181") shifted
+            # every field over by one and produced 4 corrupt lines. Neither
+            # error surfaced anywhere in the container's stdout - the
+            # process just hung at "Configuring ..." forever.
             - name: ZOOKEEPER_SERVERS
-              value: >-
-                zookeeper-0.zookeeper-headless:2888:3888;2181,
-                zookeeper-1.zookeeper-headless:2888:3888;2181,
-                zookeeper-2.zookeeper-headless:2888:3888;2181
+              value: 'zookeeper-0.zookeeper-headless:2888:3888;zookeeper-1.zookeeper-headless:2888:3888;zookeeper-2.zookeeper-headless:2888:3888'
             - name: KAFKA_HEAP_OPTS
               value: '-Xmx256M -Xms256M'
           # ZOOKEEPER_SERVER_ID must be unique per ensemble member (1-3).
