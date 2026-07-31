@@ -153,7 +153,8 @@ export class PaymentService {
     status: 'SUCCESS' | 'FAILED',
     paymentId?: string,
   ): Promise<void> {
-    const routingKey = status === 'SUCCESS' ? 'payment.succeeded' : 'payment.failed';
+    const routingKey =
+      status === 'SUCCESS' ? 'payment.succeeded' : 'payment.failed';
     const resultEvent: PaymentResultEvent = { orderId, paymentId, status };
     try {
       await this.amqpConnection.publish(this.exchange, routingKey, resultEvent);

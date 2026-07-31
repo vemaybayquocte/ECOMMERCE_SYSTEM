@@ -128,11 +128,7 @@ describe('PaymentService', () => {
     const service = await buildService();
     const headers = { 'x-death': [{ count: 3 }] };
 
-    const result = await service.handlePaymentRequested(
-      baseEvent,
-      {},
-      headers,
-    );
+    const result = await service.handlePaymentRequested(baseEvent, {}, headers);
 
     expect(result).toBeUndefined();
     expect(amqpConnection.publish).toHaveBeenCalledWith(
