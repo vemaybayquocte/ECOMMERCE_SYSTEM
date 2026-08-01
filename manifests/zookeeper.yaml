@@ -98,6 +98,25 @@ spec:
           resources:
             requests: { memory: '192Mi', cpu: '100m' }
             limits: { memory: '450Mi', cpu: '500m' }
+          volumeMounts:
+            # Covers both ZOOKEEPER_DATA_DIR (/var/lib/zookeeper/data) and
+            # ZOOKEEPER_LOG_DIR (/var/lib/zookeeper/log) - both are
+            # subdirectories of this single mount. Without this, a pod
+            # restart wipes the ensemble member's local state entirely
+            # (relying only on the other 2 members to bring it back up to
+            # date), which is a real data-loss risk if more than one
+            # member is down/restarting at once - not just theoretical,
+            # since Kafka can't function without ZK quorum either.
+            - name: data
+              mountPath: /var/lib/zookeeper
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ['ReadWriteOnce']
+        resources:
+          requests:
+            storage: 1Gi
 ---
 apiVersion: v1
 kind: Service

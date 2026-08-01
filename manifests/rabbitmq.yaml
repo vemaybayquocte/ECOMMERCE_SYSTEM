@@ -132,6 +132,18 @@ spec:
             - name: config
               mountPath: /etc/rabbitmq/conf.d/10-cluster.conf
               subPath: rabbitmq.conf
+            # Mnesia (/var/lib/rabbitmq/mnesia) is where cluster membership
+            # and classic-mirrored-queue state live. Without a PVC, a
+            # restarted node comes back as a "virgin" node with no local
+            # state at all - which is exactly what caused the
+            # "inconsistent_cluster" Mnesia mismatch during the pod-kill
+            # test earlier (rabbitmq-0 still remembered the old incarnation
+            # of rabbitmq-2, but rabbitmq-2 itself had nothing and needed a
+            # manual forget_cluster_node + rejoin). Persisting Mnesia lets
+            # a restarted node rejoin using its own remembered identity
+            # instead of needing that manual fix every time.
+            - name: data
+              mountPath: /var/lib/rabbitmq
           readinessProbe:
             # rabbitmq-diagnostics ping does a real distributed Erlang RPC
             # call - the default 1s probe timeout is too tight for that
@@ -159,6 +171,14 @@ spec:
         - name: config
           configMap:
             name: rabbitmq-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ['ReadWriteOnce']
+        resources:
+          requests:
+            storage: 1Gi
 ---
 apiVersion: v1
 kind: Service

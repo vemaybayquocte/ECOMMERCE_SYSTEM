@@ -109,6 +109,23 @@ spec:
             initialDelaySeconds: 20
             periodSeconds: 10
             timeoutSeconds: 5
+          volumeMounts:
+            # cp-kafka's default KAFKA_LOG_DIRS is /var/lib/kafka/data.
+            # Without a PVC here, a broker restart wipes every partition
+            # segment it held locally - replication-factor 3 covered this
+            # in the pod-kill test earlier only because the other 2
+            # brokers still had copies; a real durability story needs
+            # each broker's own data to survive its own restart too.
+            - name: data
+              mountPath: /var/lib/kafka/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ['ReadWriteOnce']
+        resources:
+          requests:
+            storage: 2Gi
 ---
 apiVersion: v1
 kind: Service
