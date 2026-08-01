@@ -179,9 +179,17 @@ spec:
 # Runs once the cluster has formed: without this, every queue this system
 # declares (@RabbitSubscribe/@RabbitRPC) is a classic queue that lives on
 # exactly one node even though the nodes are clustered - killing that one
-# node loses the queue's messages until it comes back. Quorum queues
-# replicate across the cluster, so the saga/payment/inventory queues
-# survive any single node going down.
+# node loses the queue's messages until it comes back.
+#
+# Quorum queues (queue-type policy key) were tried first but that's not a
+# real thing: a queue's type can only be set by the client at declare
+# time (x-queue-type arg), not retrofitted onto existing classic queues
+# via policy - rabbitmqctl rejected it outright ("not recognised policy
+# settings"). Switching the app code's queue declarations was out of
+# scope here, so this uses classic mirroring (ha-mode: all) instead: a
+# policy-only fix that needs no application changes and still survives
+# any single node going down, at the cost of the sync overhead classic
+# mirroring is known for at higher throughput.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -199,6 +207,14 @@ spec:
             - name: RABBITMQ_ERLANG_COOKIE
               valueFrom:
                 secretKeyRef: { name: rabbitmq-secret, key: RABBITMQ_ERLANG_COOKIE }
+            # The server pods run with RABBITMQ_USE_LONGNAME=true (their
+            # node names are full FQDNs). Without this same env var here,
+            # rabbitmqctl treats "rabbit@rabbitmq-0.rabbitmq-headless...."
+            # as a malformed short name and fails every single attempt
+            # with "invalid node name ... reason: short" - the job ran
+            # for 21h straight without ever actually applying the policy.
+            - name: RABBITMQ_USE_LONGNAME
+              value: 'true'
           command:
             - sh
             - -c
@@ -214,7 +230,7 @@ spec:
               i=1
               while [ "$i" -le 60 ]; do
                 if rabbitmqctl --node rabbit@rabbitmq-0.rabbitmq-headless.ecommerce.svc.cluster.local \
-                     set_policy ha-quorum "^" '{"queue-type":"quorum"}' --apply-to queues 2>&1; then
+                     set_policy ha-mirror-all "^" '{"ha-mode":"all","ha-sync-mode":"automatic"}' --apply-to queues 2>&1; then
                   echo "policy applied"
                   exit 0
                 fi
