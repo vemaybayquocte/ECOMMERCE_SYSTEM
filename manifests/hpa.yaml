@@ -10,6 +10,20 @@ spec:
     name: order-service
   minReplicas: 2
   maxReplicas: 5
+  # Default scaleUp stabilization is 0s - reacts to a single sample. On a
+  # single-node Minikube cluster, a CPU blip from unrelated pods (the
+  # messaging-tier StatefulSets forming/restarting) briefly inflates every
+  # container's measured CPU%, since it's all sharing one node's real
+  # cores - not a signal this service's own load actually grew. Without a
+  # window, that one noisy sample triggered a scale-to-max on all 3
+  # HPA-managed services simultaneously, which then contended for the
+  # same constrained memory RabbitMQ/Kafka/Zookeeper needed to schedule -
+  # a real feedback loop observed directly on this cluster.
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 90
+    scaleDown:
+      stabilizationWindowSeconds: 300
   metrics:
     - type: Resource
       resource:
@@ -30,6 +44,11 @@ spec:
     name: payment-service
   minReplicas: 2
   maxReplicas: 5
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 90
+    scaleDown:
+      stabilizationWindowSeconds: 300
   metrics:
     - type: Resource
       resource:
@@ -50,6 +69,11 @@ spec:
     name: inventory-service
   minReplicas: 2
   maxReplicas: 5
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 90
+    scaleDown:
+      stabilizationWindowSeconds: 300
   metrics:
     - type: Resource
       resource:
