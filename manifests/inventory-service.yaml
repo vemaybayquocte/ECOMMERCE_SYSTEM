@@ -11,6 +11,7 @@ data:
   DB_NAME: inventory_db
   RABBITMQ_URI: amqp://guest:guest@rabbitmq:5672
   RABBITMQ_EXCHANGE: ecommerce.events
+  RABBITMQ_PREFETCH_COUNT: '20'
 ---
 apiVersion: apps/v1
 kind: Deployment

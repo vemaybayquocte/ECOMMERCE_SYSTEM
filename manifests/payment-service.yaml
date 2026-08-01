@@ -11,7 +11,9 @@ data:
   DB_NAME: payment_db
   RABBITMQ_URI: amqp://guest:guest@rabbitmq:5672
   RABBITMQ_EXCHANGE: ecommerce.events
+  RABBITMQ_PREFETCH_COUNT: '10'
   PAYMENT_TRANSIENT_FAILURE_RATE: '0.2'
+  PAYMENT_GATEWAY_TIMEOUT_MS: '2000'
 ---
 apiVersion: apps/v1
 kind: Deployment

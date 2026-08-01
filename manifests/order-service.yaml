@@ -11,7 +11,10 @@ data:
   DB_NAME: order_db
   RABBITMQ_URI: amqp://guest:guest@rabbitmq:5672
   RABBITMQ_EXCHANGE: ecommerce.events
+  RABBITMQ_PREFETCH_COUNT: '15'
   KAFKA_BROKERS: kafka:9092
+  CATALOG_RPC_TIMEOUT_MS: '10000'
+  INVENTORY_RPC_TIMEOUT_MS: '10000'
 ---
 apiVersion: apps/v1
 kind: Deployment

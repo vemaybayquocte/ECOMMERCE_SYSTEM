@@ -149,6 +149,21 @@ spec:
         - podSelector: { matchLabels: { job-name: register-outbox-connector } }
       ports: [{ port: 8083 }]
 ---
+# Redis backs the gateway's distributed rate limiter - only the gateway
+# needs to reach it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis
+  namespace: ecommerce
+spec:
+  podSelector: { matchLabels: { app: redis } }
+  policyTypes: ['Ingress']
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: gateway-service } }
+      ports: [{ port: 6379 }]
+---
 # gateway-service is the single HTTP entry point behind the ingress
 # controller; only it (and Prometheus, for /metrics) may reach the
 # app services directly.

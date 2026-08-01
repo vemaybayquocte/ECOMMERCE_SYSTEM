@@ -8,6 +8,7 @@ data:
   OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
   RABBITMQ_URI: amqp://guest:guest@rabbitmq:5672
   RABBITMQ_EXCHANGE: ecommerce.events
+  RABBITMQ_PREFETCH_COUNT: '10'
 ---
 apiVersion: apps/v1
 kind: Deployment

@@ -13,6 +13,8 @@ data:
   CATALOG_SERVICE_URL: http://catalog-service:3005
   THROTTLE_TTL_MS: '60000'
   THROTTLE_LIMIT: '100'
+  REDIS_URL: redis://redis:6379
+  PROXY_TIMEOUT_MS: '15000'
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -42,13 +44,23 @@ spec:
             requests: { memory: '150Mi', cpu: '100m' }
             limits: { memory: '300Mi', cpu: '500m' }
           readinessProbe:
+            # Default timeoutSeconds is 1s - too tight now that /health goes
+            # through the rate-limit middleware, which touches Redis on
+            # every request. A command queued while the connection is
+            # still (re)connecting can take longer than 1s to resolve even
+            # though it succeeds - without slack here the probe kills the
+            # pod before the connection ever gets a chance to stabilize.
             httpGet: { path: /health, port: 3000 }
             initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 8
+            failureThreshold: 5
           livenessProbe:
             httpGet: { path: /health, port: 3000 }
-            initialDelaySeconds: 10
+            initialDelaySeconds: 15
             periodSeconds: 20
+            timeoutSeconds: 8
+            failureThreshold: 5
 ---
 apiVersion: v1
 kind: Service
