@@ -146,9 +146,12 @@ spec:
           # Requests trimmed below the previous value - same rationale as
           # zookeeper.yaml/kafka.yaml, see those for why the 3x replica
           # multiplier across all 3 messaging components forced this.
+          # 640Mi limit wasn't enough burst margin above the ~384Mi steady
+          # baseline during actual 3-node cluster formation - rabbitmq-2
+          # was OOMKilled (exit 137) mid-cluster-sync under real load.
           resources:
             requests: { memory: '220Mi', cpu: '150m' }
-            limits: { memory: '640Mi', cpu: '750m' }
+            limits: { memory: '800Mi', cpu: '750m' }
       volumes:
         - name: plugins
           configMap:
