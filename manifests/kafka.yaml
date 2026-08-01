@@ -90,8 +90,13 @@ spec:
               export KAFKA_BROKER_ID=${HOSTNAME##*-}
               export KAFKA_ADVERTISED_LISTENERS="PLAINTEXT://${HOSTNAME}.kafka-headless:9092"
               exec /etc/confluent/docker/run
+          # Requests trimmed below KAFKA_HEAP_OPTS' 512M cap - a broker can
+          # burst above its request up to the limit, and the request only
+          # needs to reflect steady idle usage, not peak. Same rationale as
+          # zookeeper.yaml: 3x replicas of every messaging component at once
+          # doesn't fit a single-node Minikube cluster at the old requests.
           resources:
-            requests: { memory: '640Mi', cpu: '250m' }
+            requests: { memory: '420Mi', cpu: '250m' }
             limits: { memory: '900Mi', cpu: '1' }
           readinessProbe:
             tcpSocket:

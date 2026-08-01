@@ -84,8 +84,12 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 5
+          # Requests trimmed below the JVM's actual idle footprint (~250Mi)
+          # so 3 replicas fit on a single-node Minikube cluster alongside
+          # Kafka/RabbitMQ's own 3x multiplier - limits stay generous since
+          # only requests affect scheduling, not runtime enforcement.
           resources:
-            requests: { memory: '320Mi', cpu: '100m' }
+            requests: { memory: '192Mi', cpu: '100m' }
             limits: { memory: '450Mi', cpu: '500m' }
 ---
 apiVersion: v1

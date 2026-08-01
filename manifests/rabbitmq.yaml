@@ -143,8 +143,11 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 10
             timeoutSeconds: 10
+          # Requests trimmed below the previous value - same rationale as
+          # zookeeper.yaml/kafka.yaml, see those for why the 3x replica
+          # multiplier across all 3 messaging components forced this.
           resources:
-            requests: { memory: '384Mi', cpu: '150m' }
+            requests: { memory: '220Mi', cpu: '150m' }
             limits: { memory: '640Mi', cpu: '750m' }
       volumes:
         - name: plugins
