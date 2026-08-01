@@ -9,6 +9,13 @@ metadata:
   namespace: ecommerce
 spec:
   clusterIP: None
+  # Without this, the EndpointSlice controller only publishes a pod's DNS
+  # record once it's Ready - but a ZK pod can't become Ready until it can
+  # resolve its OWN hostname to bind its quorum listener (and its peers',
+  # to reach them for election). That's a real deadlock, not a transient
+  # DNS-propagation race: a not-yet-Ready pod can never publish the record
+  # it needs to become Ready in the first place.
+  publishNotReadyAddresses: true
   selector:
     app: zookeeper
   ports:

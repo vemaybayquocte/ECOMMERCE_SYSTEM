@@ -9,6 +9,11 @@ metadata:
   namespace: ecommerce
 spec:
   clusterIP: None
+  # See zookeeper.yaml for the deadlock this avoids: a broker only
+  # publishes its own DNS record here once Ready by default, but other
+  # not-yet-Ready brokers may need to resolve it while forming the
+  # cluster during a simultaneous rollout.
+  publishNotReadyAddresses: true
   selector:
     app: kafka
   ports:
