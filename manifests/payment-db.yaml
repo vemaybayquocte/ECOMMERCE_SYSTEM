@@ -42,10 +42,24 @@ spec:
             - name: data
               mountPath: /var/lib/postgresql/data
           readinessProbe:
+            # timeoutSeconds defaults to 1s - pg_isready forks a real
+            # process inside the container, which can exceed 1s under
+            # CPU contention even though Postgres itself is healthy.
+            # Observed directly: 156 failed probes over 16 minutes on a
+            # freshly-bootstrapping cluster, none of them a real outage.
             exec:
               command: ['pg_isready', '-U', 'postgres']
             initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command: ['pg_isready', '-U', 'postgres']
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
       volumes:
         - name: data
           persistentVolumeClaim:
