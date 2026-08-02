@@ -1,4 +1,5 @@
 import { ConflictException } from '@nestjs/common';
+import { Nack } from '@golevelup/nestjs-rabbitmq';
 import { CatalogService } from './catalog.service';
 
 describe('CatalogService', () => {
@@ -72,6 +73,17 @@ describe('CatalogService', () => {
       const result = await service.getPrices({ productIds: ['p1', 'p2'] });
 
       expect(result).toEqual({ prices: [], missing: ['p1', 'p2'] });
+    });
+
+    it('poison-message backstop: Nacks straight to the DLQ instead of reprocessing when the AMQP message itself was redelivered (crash before ack)', async () => {
+      const result = await service.getPrices(
+        { productIds: ['p1'] },
+        { fields: { redelivered: true } },
+      );
+
+      expect(result).toBeInstanceOf(Nack);
+      expect((result as Nack).requeue).toBe(false);
+      expect(productRepository.find).not.toHaveBeenCalled();
     });
   });
 });

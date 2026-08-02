@@ -17,6 +17,11 @@ import { RabbitMQModule } from '@golevelup/nestjs-rabbitmq';
         ],
         uri: config.get<string>('RABBITMQ_URI'),
         connectionInitOptions: { wait: false },
+        // Bulkhead: caps in-flight messages per replica. Best-effort,
+        // lowest-priority path (customer notifications) - no reason to
+        // let it compete aggressively with other services for broker
+        // resources.
+        prefetchCount: config.get<number>('RABBITMQ_PREFETCH_COUNT', 10),
       }),
     }),
   ],

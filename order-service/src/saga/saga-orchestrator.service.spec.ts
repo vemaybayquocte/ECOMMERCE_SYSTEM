@@ -19,6 +19,7 @@ describe('SagaOrchestratorService', () => {
     service = new SagaOrchestratorService(
       orderRepository as any,
       amqpConnection as any,
+      { get: jest.fn((_key, def) => def) } as any,
     );
   });
 

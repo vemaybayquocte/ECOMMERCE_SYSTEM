@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
-import { RabbitRPC } from '@golevelup/nestjs-rabbitmq';
+import { Nack, RabbitRPC } from '@golevelup/nestjs-rabbitmq';
 import { StockItem } from './entities/stock-item.entity';
 import {
   Reservation,
@@ -24,6 +24,13 @@ export interface OrderIdRequest {
 export interface RpcResult {
   success: boolean;
   reason?: string;
+}
+
+// Minimal shape of what we need from amqplib's ConsumeMessage - avoids
+// adding a dependency on amqplib's own types (not installed directly,
+// only pulled in transitively by @golevelup/nestjs-rabbitmq).
+interface RawAmqpMessage {
+  fields: { redelivered: boolean };
 }
 
 /**
@@ -53,8 +60,27 @@ export class InventoryService {
     exchange: 'ecommerce.events',
     routingKey: 'inventory.reserve',
     queue: 'inventory.reserve-queue',
+    queueOptions: {
+      deadLetterExchange: 'ecommerce.events.dlq',
+      deadLetterRoutingKey: 'inventory.requests',
+    },
   })
-  async reserve(request: ReserveRequest): Promise<RpcResult> {
+  async reserve(
+    request: ReserveRequest,
+    msg: RawAmqpMessage = { fields: { redelivered: false } },
+  ): Promise<RpcResult | Nack> {
+    // Poison-message backstop: this handler already never throws (see
+    // class doc comment) - the ONLY way a message comes back redelivered
+    // is a real process crash mid-handler, before it could ack. Rather
+    // than risk crashing again on the same payload, give up after one
+    // redelivery and let an operator inspect it in the DLQ.
+    if (msg.fields.redelivered) {
+      this.logger.error(
+        `inventory.reserve message for order ${request.orderId} was redelivered (likely crashed mid-processing last time) - routing to DLQ instead of retrying`,
+      );
+      return new Nack(false);
+    }
+
     try {
       const existing = await this.reservationRepository.findOne({
         where: { orderId: request.orderId },
@@ -130,8 +156,22 @@ export class InventoryService {
     exchange: 'ecommerce.events',
     routingKey: 'inventory.confirm',
     queue: 'inventory.confirm-queue',
+    queueOptions: {
+      deadLetterExchange: 'ecommerce.events.dlq',
+      deadLetterRoutingKey: 'inventory.requests',
+    },
   })
-  async confirm(request: OrderIdRequest): Promise<RpcResult> {
+  async confirm(
+    request: OrderIdRequest,
+    msg: RawAmqpMessage = { fields: { redelivered: false } },
+  ): Promise<RpcResult | Nack> {
+    if (msg.fields.redelivered) {
+      this.logger.error(
+        `inventory.confirm message for order ${request.orderId} was redelivered (likely crashed mid-processing last time) - routing to DLQ instead of retrying`,
+      );
+      return new Nack(false);
+    }
+
     try {
       const reservation = await this.reservationRepository.findOne({
         where: { orderId: request.orderId },
@@ -180,8 +220,22 @@ export class InventoryService {
     exchange: 'ecommerce.events',
     routingKey: 'inventory.release',
     queue: 'inventory.release-queue',
+    queueOptions: {
+      deadLetterExchange: 'ecommerce.events.dlq',
+      deadLetterRoutingKey: 'inventory.requests',
+    },
   })
-  async release(request: OrderIdRequest): Promise<RpcResult> {
+  async release(
+    request: OrderIdRequest,
+    msg: RawAmqpMessage = { fields: { redelivered: false } },
+  ): Promise<RpcResult | Nack> {
+    if (msg.fields.redelivered) {
+      this.logger.error(
+        `inventory.release message for order ${request.orderId} was redelivered (likely crashed mid-processing last time) - routing to DLQ instead of retrying`,
+      );
+      return new Nack(false);
+    }
+
     try {
       const reservation = await this.reservationRepository.findOne({
         where: { orderId: request.orderId },

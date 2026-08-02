@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AmqpConnection, RabbitSubscribe } from '@golevelup/nestjs-rabbitmq';
@@ -8,7 +9,6 @@ import { OrderCreatedEvent } from '../order/events/order-created.event';
 import { InventoryRpcResult, PaymentResultEvent } from './events';
 
 const EXCHANGE = 'ecommerce.events';
-const RPC_TIMEOUT_MS = 10_000;
 
 interface InventoryRpcRequest {
   routingKey: 'inventory.reserve' | 'inventory.confirm' | 'inventory.release';
@@ -31,32 +31,43 @@ interface InventoryRpcRequest {
 @Injectable()
 export class SagaOrchestratorService {
   private readonly logger = new Logger(SagaOrchestratorService.name);
+  private readonly inventoryRpcTimeoutMs: number;
   // One breaker per inventory RPC operation: a burst of reserve failures
   // (e.g. inventory-service down) shouldn't make every order wait out the
-  // full 10s RPC timeout — once the failure rate crosses the threshold the
+  // full RPC timeout — once the failure rate crosses the threshold the
   // breaker opens and rejects instantly until inventory-service recovers.
-  private readonly breaker = new CircuitBreaker<
+  private readonly breaker: CircuitBreaker<
     [InventoryRpcRequest],
     InventoryRpcResult
-  >((req) => this.callInventory(req), {
-    timeout: RPC_TIMEOUT_MS + 1_000,
-    errorThresholdPercentage: 50,
-    resetTimeout: 10_000,
-    rollingCountTimeout: 10_000,
-  });
+  >;
 
   constructor(
     @InjectRepository(Order)
     private readonly orderRepository: Repository<Order>,
     private readonly amqpConnection: AmqpConnection,
-  ) {}
+    private readonly configService: ConfigService,
+  ) {
+    this.inventoryRpcTimeoutMs = this.configService.get<number>(
+      'INVENTORY_RPC_TIMEOUT_MS',
+      10_000,
+    );
+    this.breaker = new CircuitBreaker(
+      (req: InventoryRpcRequest) => this.callInventory(req),
+      {
+        timeout: this.inventoryRpcTimeoutMs + 1_000,
+        errorThresholdPercentage: 50,
+        resetTimeout: 10_000,
+        rollingCountTimeout: 10_000,
+      },
+    );
+  }
 
   private callInventory(req: InventoryRpcRequest): Promise<InventoryRpcResult> {
     return this.amqpConnection.request<InventoryRpcResult>({
       exchange: EXCHANGE,
       routingKey: req.routingKey,
       payload: req.payload,
-      timeout: RPC_TIMEOUT_MS,
+      timeout: this.inventoryRpcTimeoutMs,
     });
   }
 

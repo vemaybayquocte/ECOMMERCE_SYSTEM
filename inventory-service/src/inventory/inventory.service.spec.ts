@@ -1,7 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { InventoryService } from './inventory.service';
+import { Nack } from '@golevelup/nestjs-rabbitmq';
+import { InventoryService, RpcResult } from './inventory.service';
 import { StockItem } from './entities/stock-item.entity';
 import { Reservation, ReservationStatus } from './entities/reservation.entity';
 
@@ -83,10 +84,10 @@ describe('InventoryService', () => {
     it('returns success: false when stock is insufficient (atomic update affects 0 rows)', async () => {
       queryBuilder.execute.mockResolvedValueOnce({ affected: 0 });
 
-      const result = await service.reserve({
+      const result = (await service.reserve({
         orderId: 'order-2',
         items: [{ productId: 'p1', quantity: 9999 }],
-      });
+      })) as RpcResult;
 
       expect(result.success).toBe(false);
       expect(result.reason).toContain('insufficient_stock');
@@ -139,6 +140,17 @@ describe('InventoryService', () => {
       });
 
       expect(result).toEqual({ success: false });
+    });
+
+    it('poison-message backstop: Nacks straight to the DLQ instead of reprocessing when the AMQP message itself was redelivered (crash before ack)', async () => {
+      const result = await service.reserve(
+        { orderId: 'order-crash', items: [{ productId: 'p1', quantity: 2 }] },
+        { fields: { redelivered: true } },
+      );
+
+      expect(result).toBeInstanceOf(Nack);
+      expect((result as Nack).requeue).toBe(false);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
     });
   });
 

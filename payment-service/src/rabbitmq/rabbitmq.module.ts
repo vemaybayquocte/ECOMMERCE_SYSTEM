@@ -23,16 +23,49 @@ import { RabbitMQModule } from '@golevelup/nestjs-rabbitmq';
             { name: dlqExchange, type: 'topic' },
           ],
           queues: [
+            // 3 staged delay queues (2s/5s/12s) instead of 1 fixed 5s queue:
+            // payment.service.ts picks which one to publish a failed
+            // message into based on its current x-death count, giving
+            // real exponential backoff. Each still dead-letters back to
+            // the main exchange after its own TTL elapses - only the
+            // "which queue to enter" decision is made in application
+            // code, because a queue's dead-letter target is static and
+            // can't be chosen per-message through Nack alone (there's no
+            // delayed-message-exchange plugin installed on this cluster).
             {
-              // Holds failed messages for a fixed delay, then dead-letters
-              // them back to the main exchange for another processing attempt.
-              name: 'payment.requested-queue.retry',
+              name: 'payment.requested-queue.retry-1',
               exchange: retryExchange,
-              routingKey: 'payment.requested',
+              routingKey: 'payment.requested.retry-1',
+              options: {
+                durable: true,
+                arguments: {
+                  'x-message-ttl': 2000,
+                  'x-dead-letter-exchange': exchange,
+                  'x-dead-letter-routing-key': 'payment.requested',
+                },
+              },
+            },
+            {
+              name: 'payment.requested-queue.retry-2',
+              exchange: retryExchange,
+              routingKey: 'payment.requested.retry-2',
               options: {
                 durable: true,
                 arguments: {
                   'x-message-ttl': 5000,
+                  'x-dead-letter-exchange': exchange,
+                  'x-dead-letter-routing-key': 'payment.requested',
+                },
+              },
+            },
+            {
+              name: 'payment.requested-queue.retry-3',
+              exchange: retryExchange,
+              routingKey: 'payment.requested.retry-3',
+              options: {
+                durable: true,
+                arguments: {
+                  'x-message-ttl': 12000,
                   'x-dead-letter-exchange': exchange,
                   'x-dead-letter-routing-key': 'payment.requested',
                 },
@@ -48,6 +81,12 @@ import { RabbitMQModule } from '@golevelup/nestjs-rabbitmq';
           ],
           uri: config.get<string>('RABBITMQ_URI'),
           connectionInitOptions: { wait: false },
+          // Bulkhead: caps in-flight messages per replica so one pod can't
+          // claim unbounded work off the queue and starve the DB
+          // connection pool. callPaymentGateway has a ~500ms simulated
+          // delay, so 10 keeps a single replica's concurrent payments
+          // bounded to something the DB pool can actually sustain.
+          prefetchCount: config.get<number>('RABBITMQ_PREFETCH_COUNT', 10),
         };
       },
     }),

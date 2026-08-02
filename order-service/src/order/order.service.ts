@@ -1,14 +1,15 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { AmqpConnection } from '@golevelup/nestjs-rabbitmq';
+import * as CircuitBreaker from 'opossum';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { Order, OrderItem } from './entities/order.entity';
 import { OutboxEvent } from './entities/outbox-event.entity';
 import { OrderCreatedEvent } from './events/order-created.event';
 
 const EXCHANGE = 'ecommerce.events';
-const CATALOG_RPC_TIMEOUT_MS = 10_000;
 
 interface GetPricesResult {
   prices: { productId: string; price: number }[];
@@ -18,12 +19,36 @@ interface GetPricesResult {
 @Injectable()
 export class OrderService {
   private readonly logger = new Logger(OrderService.name);
+  private readonly catalogRpcTimeoutMs: number;
+  // Same rationale as saga-orchestrator.service.ts's inventory breaker: a
+  // burst of catalog-service failures shouldn't make every order-creation
+  // request wait out the full RPC timeout - once the failure rate crosses
+  // the threshold the breaker opens and rejects instantly instead.
+  private readonly priceBreaker: CircuitBreaker<
+    [{ productIds: string[] }],
+    GetPricesResult
+  >;
 
   constructor(
     @InjectDataSource()
     private readonly dataSource: DataSource,
     private readonly amqpConnection: AmqpConnection,
-  ) {}
+    private readonly configService: ConfigService,
+  ) {
+    this.catalogRpcTimeoutMs = this.configService.get<number>(
+      'CATALOG_RPC_TIMEOUT_MS',
+      10_000,
+    );
+    this.priceBreaker = new CircuitBreaker(
+      (req: { productIds: string[] }) => this.callCatalog(req),
+      {
+        timeout: this.catalogRpcTimeoutMs + 1_000,
+        errorThresholdPercentage: 50,
+        resetTimeout: 10_000,
+        rollingCountTimeout: 10_000,
+      },
+    );
+  }
 
   async createOrder(dto: CreateOrderDto): Promise<Order> {
     const items = await this.priceItems(dto.items);
@@ -74,6 +99,17 @@ export class OrderService {
   // Looks up the authoritative price per productId from catalog-service
   // instead of trusting whatever the client sends - a client could
   // otherwise set an arbitrary price on any item.
+  private callCatalog(req: {
+    productIds: string[];
+  }): Promise<GetPricesResult> {
+    return this.amqpConnection.request<GetPricesResult>({
+      exchange: EXCHANGE,
+      routingKey: 'catalog.get-prices',
+      payload: req,
+      timeout: this.catalogRpcTimeoutMs,
+    });
+  }
+
   private async priceItems(
     items: { productId: string; quantity: number }[],
   ): Promise<OrderItem[]> {
@@ -81,12 +117,7 @@ export class OrderService {
 
     let result: GetPricesResult;
     try {
-      result = await this.amqpConnection.request<GetPricesResult>({
-        exchange: EXCHANGE,
-        routingKey: 'catalog.get-prices',
-        payload: { productIds },
-        timeout: CATALOG_RPC_TIMEOUT_MS,
-      });
+      result = await this.priceBreaker.fire({ productIds });
     } catch (err) {
       this.logger.error(
         `catalog.get-prices RPC failed: ${(err as Error).message}`,

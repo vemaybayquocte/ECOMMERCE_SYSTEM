@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
 import { AmqpConnection } from '@golevelup/nestjs-rabbitmq';
@@ -38,6 +39,10 @@ describe('OrderService', () => {
         OrderService,
         { provide: DataSource, useValue: dataSource },
         { provide: AmqpConnection, useValue: amqpConnection },
+        {
+          provide: ConfigService,
+          useValue: { get: jest.fn((_key, def) => def) },
+        },
       ],
     }).compile();
 

@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { AmqpConnection, Nack } from '@golevelup/nestjs-rabbitmq';
+import { AmqpConnection } from '@golevelup/nestjs-rabbitmq';
 import { PaymentService } from './payment.service';
 import { Payment, PaymentStatus } from './entities/payment.entity';
 import { PaymentRequestedEvent } from './events/payment-requested.event';
@@ -111,17 +111,46 @@ describe('PaymentService', () => {
     );
   });
 
-  it('returns Nack(false) on a transient gateway error instead of throwing', async () => {
+  it('publishes to the first staged retry queue on a transient gateway error instead of throwing', async () => {
     // Force the transient-failure branch: transientFailureRate = 1 means
     // Math.random() < 1 is always true.
     const service = await buildService(1);
 
     const result = await service.handlePaymentRequested(baseEvent, {}, {});
 
-    expect(result).toBeInstanceOf(Nack);
-    expect((result as Nack).requeue).toBe(false);
+    expect(result).toBeUndefined();
+    expect(amqpConnection.publish).toHaveBeenCalledWith(
+      'ecommerce.events.retry',
+      'payment.requested.retry-1',
+      baseEvent,
+    );
     expect(paymentRepository.save).not.toHaveBeenCalled();
-    expect(amqpConnection.publish).not.toHaveBeenCalled();
+  });
+
+  it('escalates to the second/third staged retry queue as x-death count grows', async () => {
+    const service = await buildService(1);
+
+    await service.handlePaymentRequested(
+      baseEvent,
+      {},
+      { 'x-death': [{ count: 1 }] },
+    );
+    expect(amqpConnection.publish).toHaveBeenCalledWith(
+      'ecommerce.events.retry',
+      'payment.requested.retry-2',
+      baseEvent,
+    );
+
+    await service.handlePaymentRequested(
+      baseEvent,
+      {},
+      { 'x-death': [{ count: 2 }] },
+    );
+    expect(amqpConnection.publish).toHaveBeenCalledWith(
+      'ecommerce.events.retry',
+      'payment.requested.retry-3',
+      baseEvent,
+    );
   });
 
   it('routes to the DLQ and publishes payment.failed once the retry count reaches the max', async () => {

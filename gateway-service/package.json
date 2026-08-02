@@ -30,7 +30,9 @@
     "@opentelemetry/sdk-node": "^0.221.0",
     "express-rate-limit": "^7.4.1",
     "http-proxy-middleware": "^3.0.3",
+    "ioredis": "^6.0.0",
     "prom-client": "^15.1.3",
+    "rate-limit-redis": "^4.3.1",
     "reflect-metadata": "^0.2.0",
     "rxjs": "^7.8.1"
   },

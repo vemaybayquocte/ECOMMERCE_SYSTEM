@@ -19,6 +19,16 @@ const logger = new Logger('ProxySetup');
  * before the middleware ever sees it, which breaks forwarding to services
  * whose own routes still expect that prefix (auth-service, order-service).
  */
+// Bounds how long the gateway waits on a downstream service: `timeout`
+// caps idle/connect time, `proxyTimeout` caps total time waiting for a
+// response - http-proxy treats them separately so both need setting.
+// Kept above the internal RPC timeouts deeper in the call chain
+// (order-service's CATALOG_RPC_TIMEOUT_MS/INVENTORY_RPC_TIMEOUT_MS) so
+// the gateway doesn't sever the connection before an internal circuit
+// breaker/timeout has a chance to resolve first. Without this, a hung
+// downstream would hold the gateway's connection open indefinitely.
+const PROXY_TIMEOUT_MS = Number(process.env.PROXY_TIMEOUT_MS ?? 15_000);
+
 export function setupProxies(app: NestExpressApplication) {
   const targets = {
     auth: process.env.AUTH_SERVICE_URL || 'http://localhost:3004',
@@ -33,6 +43,8 @@ export function setupProxies(app: NestExpressApplication) {
       pathFilter: (path) => path.startsWith('/auth'),
       target: targets.auth,
       changeOrigin: true,
+      timeout: PROXY_TIMEOUT_MS,
+      proxyTimeout: PROXY_TIMEOUT_MS,
     }),
   );
   app.use(
@@ -40,6 +52,8 @@ export function setupProxies(app: NestExpressApplication) {
       pathFilter: (path) => path.startsWith('/orders'),
       target: targets.orders,
       changeOrigin: true,
+      timeout: PROXY_TIMEOUT_MS,
+      proxyTimeout: PROXY_TIMEOUT_MS,
     }),
   );
   app.use(
@@ -48,6 +62,8 @@ export function setupProxies(app: NestExpressApplication) {
       target: targets.payments,
       changeOrigin: true,
       pathRewrite: { '^/payments': '' },
+      timeout: PROXY_TIMEOUT_MS,
+      proxyTimeout: PROXY_TIMEOUT_MS,
     }),
   );
   app.use(
@@ -56,6 +72,8 @@ export function setupProxies(app: NestExpressApplication) {
       target: targets.inventory,
       changeOrigin: true,
       pathRewrite: { '^/inventory': '' },
+      timeout: PROXY_TIMEOUT_MS,
+      proxyTimeout: PROXY_TIMEOUT_MS,
     }),
   );
 
@@ -64,6 +82,8 @@ export function setupProxies(app: NestExpressApplication) {
       pathFilter: (path) => path.startsWith('/products'),
       target: targets.catalog,
       changeOrigin: true,
+      timeout: PROXY_TIMEOUT_MS,
+      proxyTimeout: PROXY_TIMEOUT_MS,
     }),
   );
 
